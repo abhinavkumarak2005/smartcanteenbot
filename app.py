@@ -1842,4 +1842,3 @@ if __name__ == '__main__':
 
 # The Flask application object 'app' must be at the top level for Gunicorn to find it.
 # We do not need a final else/catch block outside of the polling run.
-```

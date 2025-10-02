@@ -75,6 +75,8 @@ app = Flask(__name__)
 def setup_flask_routes():
     """Registers all necessary Flask routes to prevent AssertionError."""
 
+    # NOTE: This function is called only once when the Flask app is loaded by Gunicorn.
+
     @app.route('/order_success', methods=['GET'])
     def order_success():
         """Endpoint for Razorpay redirect after successful payment (browser view)."""
@@ -1728,41 +1730,28 @@ def start_cleanup_thread():
     print("🧹 Started background cleanup thread (runs every 5 minutes, checking for daily reset)")
 
 
-# --- FLASK SERVER & BOT STARTUP (Unchanged) ---
+# --- FLASK SERVER & BOT STARTUP (FIXED) ---
 
-def run_flask():
-    """Starts the Flask server in a separate process."""
-    PORT = 5001
-    print(f"🌐 Starting Flask server on port {PORT}...")
-    app.run(host='0.0.0.0', port=PORT)
-
-
-def run_bot():
-    """Starts the Telegram bot polling."""
-    print("\n🚀 Starting Telegram Bot Polling...")
-    print("   📡 Bot is now listening for messages...")
-    print("   ⏹️  Press Ctrl+C to stop\n")
-    print("=" * 50)
-
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=3)
-        except Exception as e:
-            print(f"❌ Polling failed due to fatal error: {e}. Retrying in 5 seconds...")
-            time.sleep(5)
-        except KeyboardInterrupt:
-            break
-
+# We remove the run_flask function and the manual threading to avoid conflicts.
+# The Gunicorn command in the Web Service handles the web server part.
+# The 'python app.py' command in the Polling Service handles the bot and threads.
 
 if __name__ == '__main__':
     if not os.getenv('BOT_TOKEN') or not RAZORPAY_CLIENT:
         print("\n🛑 Application setup incomplete. Check .env file.")
         exit(1)
 
-    try:
+    # Check if we are being run by Gunicorn (Web Service) or directly (Polling Service)
+    # Gunicorn sets the GUNICORN_PID environment variable.
+    # If GUNICORN_PID is set, we are running as the Web Service.
+    if 'GUNICORN_PID' in os.environ:
+        print("🌐 Running in Web Service Mode (Gunicorn). Skipping Polling/Threads setup.")
+        # We still need to call this so the app object has all the routes registered
         setup_flask_routes()
-
-        print("🔧 Initializing Telegram Canteen Bot...")
+    
+    # If GUNICORN_PID is NOT set, we are running as the Polling Service (python app.py)
+    else:
+        print("\n🔧 Initializing Telegram Canteen Bot (Polling Service Mode)...")
         print("=" * 50)
 
         print("🗃️  Setting up database...")
@@ -1779,6 +1768,7 @@ if __name__ == '__main__':
             exit(1)
 
         start_cleanup_thread()
+        setup_flask_routes() # Call this here too, just in case (though unnecessary for polling)
 
         print("\n🔧 Bot Configuration:")
         print(f"   👤 Payee Name: {PAYEE_NAME}")
@@ -1788,23 +1778,14 @@ if __name__ == '__main__':
 
         print("=" * 50)
 
+        # The run_bot function contains the actual polling loop
         try:
-            flask_thread = threading.Thread(target=run_flask, daemon=True)
-            flask_thread.start()
-            time.sleep(1)
+            run_bot()
+        except KeyboardInterrupt:
+            print("\n🛑 Bot stopped by user.")
         except Exception as e:
-            print(f"❌ Error starting Flask thread (Port 5001 issue likely): {e}")
-            print("Please ensure no other program (like ngrok or a previous run) is using port 5001.")
-            exit(1)
+            print(f"❌ Error starting application: {e}")
+            traceback.print_exc()
 
-        if ADMIN_CHAT_IDS:
-            pass
-
-        run_bot()
-
-
-    except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user.")
-    except Exception as e:
-        print(f"❌ Error starting application: {e}")
-        traceback.print_exc()
+# The Flask application object 'app' must be at the top level for Gunicorn to find it.
+# We do not need a final else/catch block outside of the polling run.

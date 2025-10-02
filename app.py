@@ -54,10 +54,13 @@ RAZORPAY_CLIENT = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 print("✅ Razorpay Client initialized.")
 
 # --- TELEGRAM SETUP ---
+# Initialize bot here for webhooks only. Handlers must be defined later.
+# We will fully initialize the polling bot inside the if __name__ == '__main__': block.
 print(f"✅ Telegram Bot Token loaded successfully.")
 try:
     logger = telebot.logger
     telebot.logger.setLevel(logging.INFO)
+    # The 'bot' object is defined but not yet started/polled.
     bot = telebot.TeleBot(TOKEN)
 except Exception as e:
     print(f"❌ Error initializing TeleBot: {e}")

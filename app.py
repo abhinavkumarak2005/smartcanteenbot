@@ -649,7 +649,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
     main_keyboard = get_main_reply_keyboard()
     if ticket_qr_path:
         # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
-        bot.send_photo(student_db_id, photo=open(ticket_qr_path, 'rb'), caption=pickup_msg, parse_mode=None,
+        bot.send_photo(student_db_id, photo=open(ticket_qr_path, 'rb'), caption=pickup_msg, parse_mode='Markdown',
                        reply_markup=main_keyboard)
     else:
         # Fallback if QR image generation fails
@@ -1488,9 +1488,9 @@ def handle_inline_callbacks(call):
 
             items_list = db_manager.parse_order_items(order['items'])
             food_summary = "\n".join([
-                f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
-                for item in items_list
-            ])
+                    f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
+                    for item in items_list
+                ])
 
             # Use saved phone for confirmation display
             contact_display = db_manager.get_user_phone(student_db_id)
@@ -1761,6 +1761,7 @@ def run_bot():
 
     # CRITICAL FIX: Clear any active webhook before starting polling
     try:
+        # NOTE: Even if webhook is already deleted, the 409 conflict can still occur if two threads try to poll simultaneously.
         if bot.delete_webhook():
             print("✅ Successfully cleared existing Telegram webhook.")
     except Exception as e:

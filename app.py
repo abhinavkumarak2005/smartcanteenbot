@@ -1730,6 +1730,23 @@ def start_cleanup_thread():
     print("🧹 Started background cleanup thread (runs every 5 minutes, checking for daily reset)")
 
 
+# --- TELEGRAM BOT POLLING FUNCTION (RESTORED) ---
+def run_bot():
+    """Starts the Telegram bot polling loop."""
+    print("\n🚀 Starting Telegram Bot Polling...")
+    print("   📡 Bot is now listening for messages...")
+    print("   ⏹️  Press Ctrl+C to stop\n")
+    print("=" * 50)
+
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=3)
+        except Exception as e:
+            print(f"❌ Polling failed due to fatal error: {e}. Retrying in 5 seconds...")
+            time.sleep(5)
+        except KeyboardInterrupt:
+            break
+
 # --- FLASK SERVER & BOT STARTUP (FIXED) ---
 
 # We remove the run_flask function and the manual threading to avoid conflicts.

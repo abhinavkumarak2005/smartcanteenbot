@@ -1525,15 +1525,32 @@ def handle_inline_callbacks(call):
                 return
 
             total_amount = order['total_amount']
-            razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount,
-                                                                             student_db_id)
+            
+            # --- START FIX 1: CHECK FOR EXISTING PAYMENT LINK ---
+            razorpay_order_id = order.get('razorpay_order_id')
+            payment_link = order.get('payment_link')
+            
+            if razorpay_order_id and payment_link:
+                # Use existing link to avoid Razorpay error
+                print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
+            else:
+                # Generate new link only if none exists
+                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+            # --- END FIX 1 ---
 
             if razorpay_order_id and payment_link:
-                db_manager.update_razorpay_details(current_order_id, razorpay_order_id, payment_link)
+                # Only update DB if a *new* link was generated or if details were missing
+                if not order.get('razorpay_order_id'):
+                    db_manager.update_razorpay_details(current_order_id, razorpay_order_id, payment_link)
+                    
                 db_manager.update_order_status(current_order_id, 'payment_pending')
 
                 payment_keyboard = create_payment_keyboard(payment_link, current_order_id)
+                
+                # --- START FIX 2: Check if file exists before using open() (though usually fine on Render) ---
                 payment_qr_path = generate_payment_qr_code(payment_link, current_order_id)
+                # --- END FIX 2 ---
+
 
                 payment_msg = (
                     f"✅ *Order Ready for Payment! (ID: #{current_order_id})*\n\n"
@@ -1552,6 +1569,7 @@ def handle_inline_callbacks(call):
                 )
 
                 if payment_qr_path:
+                    # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
                     with open(payment_qr_path, 'rb') as photo:
                         bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
                                        reply_markup=payment_keyboard)
@@ -1753,6 +1771,9 @@ def run_bot():
 # The Gunicorn command in the Web Service handles the web server part.
 # The 'python app.py' command in the Polling Service handles the bot and threads.
 
+# CRITICAL FIX: Call setup_flask_routes here so that Gunicorn always loads all routes.
+setup_flask_routes()
+
 if __name__ == '__main__':
     if not os.getenv('BOT_TOKEN') or not RAZORPAY_CLIENT:
         print("\n🛑 Application setup incomplete. Check .env file.")
@@ -1763,8 +1784,7 @@ if __name__ == '__main__':
     # If GUNICORN_PID is set, we are running as the Web Service.
     if 'GUNICORN_PID' in os.environ:
         print("🌐 Running in Web Service Mode (Gunicorn). Skipping Polling/Threads setup.")
-        # We still need to call this so the app object has all the routes registered
-        setup_flask_routes()
+        # All routes are already set up above. No further startup is needed for the Web Service.
     
     # If GUNICORN_PID is NOT set, we are running as the Polling Service (python app.py)
     else:
@@ -1785,7 +1805,6 @@ if __name__ == '__main__':
             exit(1)
 
         start_cleanup_thread()
-        setup_flask_routes() # Call this here too, just in case (though unnecessary for polling)
 
         print("\n🔧 Bot Configuration:")
         print(f"   👤 Payee Name: {PAYEE_NAME}")

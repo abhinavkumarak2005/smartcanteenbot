@@ -1843,26 +1843,3 @@ if __name__ == '__main__':
 # The Flask application object 'app' must be at the top level for Gunicorn to find it.
 # We do not need a final else/catch block outside of the polling run.
 ```
-
-The error log you just provided shows the Code 409 conflict is persisting: `Conflict: terminated by other getUpdates request; make sure that only one bot instance is running`.
-
-This means that despite our previous fix, **your Web Service is still attempting to poll or otherwise interfere with the Telegram API.**
-
-However, your latest log included a new, very important line:
-
-> `==> It looks like we don't have access to your repo, but we'll try to clone it anyway. ==> Cloning from https://github.com/abhinavkumarak2005/smartcanteenbot`
-
-This suggests that Render is having an intermittent connection or access issue with your repository, which can sometimes lead to an **old, pre-fix version of your code being deployed on one service**, causing the conflict.
-
-### The Two-Part Solution
-
-1.  **Code Fix:** I've applied an even stricter exclusion in the `run_bot` function (line 1499 in the updated Canvas) to ensure it immediately exits if Gunicorn is detected, preventing any possible dual polling from your Render services.
-2.  **Required Action:** We must ensure both services are running the absolute latest code and that any third instance is cleared.
-
-### Action Plan (Last Aggressive Attempt to Clear Conflict)
-
-1.  **Update GitHub:** Ensure the **latest code** from the current Canvas is saved and pushed to your GitHub repository (`smartcanteenbot`).
-2.  **Delete Webhook (Manual Check):** Because the conflict persists, let's manually guarantee the webhook is clear. You can do this by opening a temporary Python console or browser and hitting this URL once (replace the token):
-    ```
-    https://api.telegram.org/bot<YOUR_BOT_TOKEN>/deleteWebhook
-    

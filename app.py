@@ -1756,9 +1756,18 @@ def run_bot():
     print("   ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
+    # CRITICAL FIX: Clear any active webhook before starting polling
+    try:
+        if bot.delete_webhook():
+            print("✅ Successfully cleared existing Telegram webhook.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not delete webhook on startup: {e}")
+
+
     while True:
         try:
-            bot.polling(none_stop=True, interval=3)
+            # Note: Changed from none_stop to non_stop to address deprecation warning
+            bot.polling(non_stop=True, interval=3)
         except Exception as e:
             print(f"❌ Polling failed due to fatal error: {e}. Retrying in 5 seconds...")
             time.sleep(5)

@@ -217,7 +217,7 @@ def setup_flask_routes():
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Order #{order_id} Ticket</title>
             <style>
-                body {{ font-family: sans-serif; background-color: #f7f7f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px 0; }}
+                body {{ font-family: sans-serif; text-align: center; background-color: #f7f7f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px 0; }}
                 .ticket {{ 
                     width: 90%; max-width: 500px; background-color: #fff; border: 3px solid #ccc; 
                     border-radius: 15px; padding: 25px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);
@@ -959,7 +959,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
     # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
     elif command == 'help':
-        # FIX: Removed unclosed parenthesis from here (line 993)
         help_text = (
             f"❓ **Admin Instructions & Commands**\n\n"
             f"All management functions are performed using **text commands**.\n"

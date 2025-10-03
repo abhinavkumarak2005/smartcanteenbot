@@ -214,7 +214,7 @@ def setup_flask_routes():
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Order #{order_id} Ticket</title>
             <style>
                 body {{ font-family: sans-serif; background-color: #f7f7f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px 0; }}

@@ -959,6 +959,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
     # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
     elif command == 'help':
+        # FIX: Removed unclosed parenthesis from here (line 993)
         help_text = (
             f"❓ **Admin Instructions & Commands**\n\n"
             f"All management functions are performed using **text commands**.\n"
@@ -998,7 +999,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
             "   (Shows all orders from the current day)\n\n"
             "2. **View Archived Orders (History):**\n"
             "   Type `/viewarchive`\n"
-            (Displays clickable archive files for previous days)\n"
+            "   (Displays clickable archive files for previous days)\n"
         )
         edit_message(instruct_text, back_to_dashboard)
         return
@@ -1547,7 +1548,18 @@ def handle_inline_callbacks(call):
                 print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
             else:
                 # Generate new link only if none exists
-                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                try:
+                    razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                except requests.exceptions.ConnectionError:
+                    print("❌ Network connection failed during Razorpay link generation. Resetting session.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
             # --- END FIX 1 ---
 
             if razorpay_order_id and payment_link:

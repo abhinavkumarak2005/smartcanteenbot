@@ -739,12 +739,12 @@ def get_archived_orders_by_filename(filename):
         with open(filepath, 'r') as f:
             data = json.load(f)
             return data
-        except json.JSONDecodeError as e:
-            logging.error(f"Error decoding JSON from archive file {filename}: {e}")
-            return None
-        except Exception as e:
-            logging.error(f"Error reading archived file {filename}: {e}")
-            return None
+    except json.JSONDecodeError as e:
+        logging.error(f"Error decoding JSON from archive file {filename}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Error reading archived file {filename}: {e}")
+        return None
 
 
 def get_archive_file_list():

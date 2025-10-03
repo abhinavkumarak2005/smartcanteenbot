@@ -55,13 +55,10 @@ RAZORPAY_CLIENT = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 print("✅ Razorpay Client initialized.")
 
 # --- TELEGRAM SETUP ---
-# Initialize bot here for webhooks only. Handlers must be defined later.
-# We will fully initialize the polling bot inside the if __name__ == '__main__': block.
 print(f"✅ Telegram Bot Token loaded successfully.")
 try:
     logger = telebot.logger
     telebot.logger.setLevel(logging.INFO)
-    # The 'bot' object is defined but not yet started/polled.
     bot = telebot.TeleBot(TOKEN)
 except Exception as e:
     print(f"❌ Error initializing TeleBot: {e}")
@@ -78,8 +75,7 @@ app = Flask(__name__)
 
 def setup_flask_routes():
     """Registers all necessary Flask routes to prevent AssertionError."""
-
-    # NOTE: This function is called only once when the Flask app is loaded by Gunicorn.
+    # NOTE: This is called on script load and before main execution.
 
     @app.route('/order_success', methods=['GET'])
     def order_success():
@@ -1002,7 +998,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
             "   (Shows all orders from the current day)\n\n"
             "2. **View Archived Orders (History):**\n"
             "   Type `/viewarchive`\n"
-            "   (Displays clickable archive files for previous days)\n"
+            (Displays clickable archive files for previous days)\n"
         )
         edit_message(instruct_text, back_to_dashboard)
         return
@@ -1050,7 +1046,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             archive_text += (
                 f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
-                f"   - Items: {item_summary}\n"
+                f"  - Items: {item_summary}\n"
             )
 
         # back_to_orders_instruct points to the order instructions panel.
@@ -1270,19 +1266,6 @@ def handle_incoming_message(message: Message):
                                  reply_markup=reply_markup)
 
 
-    except requests.exceptions.ConnectionError as e:
-        # Catch network/connection errors during chat processing (e.g., if Telegram drops connection)
-        print(f"❌ Network Connection Error during incoming message: {e}")
-        traceback.print_exc()
-        try:
-            # Clear state to force a clean restart on the next message
-            db_manager.set_session_state(student_db_id, 'initial', None)
-            bot.send_message(message.chat.id,
-                             "⚠️ Connection Reset. Please tap 'Menu 🍽️' to start a new, clean order.",
-                             reply_markup=get_main_reply_keyboard())
-        except Exception:
-            # If sending the message fails, the connection is totally dead.
-            pass
     except Exception as e:
         # The generic fallback message is sufficient
         print(f"❌ Error handling incoming message: {e}")
@@ -1564,18 +1547,7 @@ def handle_inline_callbacks(call):
                 print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
             else:
                 # Generate new link only if none exists
-                try:
-                    razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
-                except requests.exceptions.ConnectionError:
-                    print("❌ Network connection failed during Razorpay link generation. Resetting session.")
-                    db_manager.set_session_state(student_db_id, 'initial', None)
-                    bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
-                        reply_markup=get_main_reply_keyboard()
-                    )
-                    return
+                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
             # --- END FIX 1 ---
 
             if razorpay_order_id and payment_link:
@@ -1631,19 +1603,6 @@ def handle_inline_callbacks(call):
                 return
 
 
-    except requests.exceptions.ConnectionError as e:
-        # Catch network/connection errors during chat processing (e.g., if Telegram drops connection)
-        print(f"❌ Network Connection Error during inline callback: {e}")
-        traceback.print_exc()
-        # Clear state to force a clean restart on the next message
-        db_manager.set_session_state(student_db_id, 'initial', None)
-        try:
-            bot.send_message(chat_id,
-                             "⚠️ Connection Reset. Please tap 'Menu 🍽️' to start a new, clean order.",
-                             reply_markup=get_main_reply_keyboard())
-        except Exception:
-            # If sending the message fails, the connection is totally dead.
-            pass
     except Exception as e:
         # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")

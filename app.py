@@ -1270,6 +1270,19 @@ def handle_incoming_message(message: Message):
                                  reply_markup=reply_markup)
 
 
+    except requests.exceptions.ConnectionError as e:
+        # Catch network/connection errors during chat processing (e.g., if Telegram drops connection)
+        print(f"❌ Network Connection Error during incoming message: {e}")
+        traceback.print_exc()
+        try:
+            # Clear state to force a clean restart on the next message
+            db_manager.set_session_state(student_db_id, 'initial', None)
+            bot.send_message(message.chat.id,
+                             "⚠️ Connection Reset. Please tap 'Menu 🍽️' to start a new, clean order.",
+                             reply_markup=get_main_reply_keyboard())
+        except Exception:
+            # If sending the message fails, the connection is totally dead.
+            pass
     except Exception as e:
         # The generic fallback message is sufficient
         print(f"❌ Error handling incoming message: {e}")
@@ -1551,7 +1564,18 @@ def handle_inline_callbacks(call):
                 print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
             else:
                 # Generate new link only if none exists
-                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                try:
+                    razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                except requests.exceptions.ConnectionError:
+                    print("❌ Network connection failed during Razorpay link generation. Resetting session.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
             # --- END FIX 1 ---
 
             if razorpay_order_id and payment_link:
@@ -1595,17 +1619,31 @@ def handle_inline_callbacks(call):
                 db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
                 return
             else:
+                # This catches Razorpay internal errors or invalid response
+                db_manager.set_session_state(student_db_id, 'initial', None)
                 bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text="❌ Could not generate payment link. Please try again or contact support.",
                     reply_markup=None
                 )
-                db_manager.set_session_state(student_db_id, 'initial', None)
                 bot.send_message(chat_id, "Tap 'Menu 🍽️' to try again.", reply_markup=get_main_reply_keyboard())
                 return
 
 
+    except requests.exceptions.ConnectionError as e:
+        # Catch network/connection errors during chat processing (e.g., if Telegram drops connection)
+        print(f"❌ Network Connection Error during inline callback: {e}")
+        traceback.print_exc()
+        # Clear state to force a clean restart on the next message
+        db_manager.set_session_state(student_db_id, 'initial', None)
+        try:
+            bot.send_message(chat_id,
+                             "⚠️ Connection Reset. Please tap 'Menu 🍽️' to start a new, clean order.",
+                             reply_markup=get_main_reply_keyboard())
+        except Exception:
+            # If sending the message fails, the connection is totally dead.
+            pass
     except Exception as e:
         # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")

@@ -17,6 +17,7 @@ import logging
 import razorpay
 import re
 from flask import Flask, request, jsonify, render_template_string
+import requests # Ensure requests is imported for exception handling
 
 # --- PROJECT CONFIGURATION & ROBUST .ENV LOADING ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -649,8 +650,9 @@ def handle_successful_payment(internal_order_id, student_db_id):
     main_keyboard = get_main_reply_keyboard()
     if ticket_qr_path:
         # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
-        bot.send_photo(student_db_id, photo=open(ticket_qr_path, 'rb'), caption=pickup_msg, parse_mode='Markdown',
-                       reply_markup=main_keyboard)
+        with open(ticket_qr_path, 'rb') as photo:
+            bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='Markdown',
+                           reply_markup=main_keyboard)
     else:
         # Fallback if QR image generation fails
         fallback_msg = (
@@ -1449,7 +1451,15 @@ def handle_inline_callbacks(call):
 
         elif data == 'checkout':
             # Proceed to service type selection
+            current_order_id = db_manager.get_session_order_id(student_db_id)
+            if not current_order_id or not db_manager.get_order_details(current_order_id):
+                 # Fail gracefully if order is somehow lost
+                start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order details lost. Restarting.")
+                return
+
             db_manager.set_session_state(student_db_id, 'awaiting_service_type', current_order_id)
+            
+            # Show checkout message
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -1462,13 +1472,16 @@ def handle_inline_callbacks(call):
         # 4. SERVICE TYPE SELECTION: data='service:<type>'
         elif data.startswith('service:'):
             service_type = data.split(':')[1]
+            current_order_id = db_manager.get_session_order_id(student_db_id)
 
-            db_manager.update_order_service_type(current_order_id, service_type)
-            order = db_manager.get_order_details(current_order_id)
-
-            if not order:
+            # CRITICAL SAFETY CHECK
+            if not current_order_id or not db_manager.get_order_details(current_order_id):
                 start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order error. Restarting.")
                 return
+            
+            # --- Continue processing ---
+            db_manager.update_order_service_type(current_order_id, service_type)
+            order = db_manager.get_order_details(current_order_id)
 
             # CRITICAL CHECK: Ask for phone number here if needed
             if not db_manager.get_user_phone(student_db_id):
@@ -1594,10 +1607,16 @@ def handle_inline_callbacks(call):
 
 
     except Exception as e:
+        # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")
         traceback.print_exc()
-        error_message = "❌ An internal error occurred! Please tap 'Menu 🍽️' to restart the flow."
-        bot.send_message(chat_id, error_message, reply_markup=get_main_reply_keyboard())
+        # Fallback: Send a message to restart the flow
+        try:
+            error_message = "❌ An internal error occurred! Please tap 'Menu 🍽️' to restart the flow."
+            bot.send_message(chat_id, error_message, reply_markup=get_main_reply_keyboard())
+        except Exception:
+            # If sending the message fails, the connection is totally dead.
+            pass
 
 
 def prompt_for_phone_number(student_db_id, chat_id):
@@ -1791,6 +1810,20 @@ def run_bot():
 # CRITICAL FIX: Call setup_flask_routes here so that Gunicorn always loads all routes.
 setup_flask_routes()
 
+# --- NEW: RUN FLASK SERVER IN A THREAD (FOR SINGLE SERVICE MODE) ---
+def run_flask():
+    """Starts the Flask server in a separate thread, bound to the PORT environment variable."""
+    # Render requires the app to bind to the port defined by its environment.
+    # We use 5001 as a fallback for local testing, but it will use the Render-assigned port.
+    PORT = int(os.environ.get("PORT", 5001))
+    print(f"🌐 Starting Flask server in background thread on port {PORT}...")
+    # NOTE: We must disable Flask's reloader when running in a thread/production environment
+    try:
+        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"❌ Critical Error: Could not start Flask thread on port {PORT}: {e}")
+        # The main thread (polling) will continue to run even if the Flask thread fails to bind.
+
 if __name__ == '__main__':
     if not os.getenv('BOT_TOKEN') or not RAZORPAY_CLIENT:
         print("\n🛑 Application setup incomplete. Check .env file.")
@@ -1803,11 +1836,16 @@ if __name__ == '__main__':
         print("🌐 Running in Web Service Mode (Gunicorn). Skipping Polling/Threads setup.")
         # All routes are already set up above. No further startup is needed for the Web Service.
     
-    # If GUNICORN_PID is NOT set, we are running as the Polling Service (python app.py)
+    # If GUNICORN_PID is NOT set, we are running as the Hybrid/Polling Service (python app.py)
     else:
-        print("\n🔧 Initializing Telegram Canteen Bot (Polling Service Mode)...")
+        print("\n🔧 Initializing Telegram Canteen Bot (Hybrid Service Mode)...")
         print("=" * 50)
-
+        
+        # --- AGGRESSIVE DB RESET ---
+        # NOTE: This call forces a fresh start and resets the order ID counter.
+        if db_manager.aggressive_db_reset():
+            print("✅ Database file reset successful.")
+        
         print("🗃️  Setting up database...")
         if db_manager.create_tables():
             print("✅ Database tables created/verified successfully!")
@@ -1820,6 +1858,15 @@ if __name__ == '__main__':
         else:
             print("❌ Database initialization failed!")
             exit(1)
+        
+        # --- START FLASK THREAD ---
+        try:
+            flask_thread = threading.Thread(target=run_flask, daemon=True)
+            flask_thread.start()
+            time.sleep(1) # Give the server a moment to bind to the port
+        except Exception as e:
+            print(f"❌ Critical Error: Could not start Flask thread: {e}")
+            # Do not exit, as polling might still work, but webhooks will fail.
 
         start_cleanup_thread()
         db_manager.cleanup_old_sessions() # Aggressively clean up sessions before starting bot

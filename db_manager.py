@@ -46,27 +46,11 @@ def create_tables():
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS menu
                        (
-                           id
-                           INTEGER
-                           PRIMARY
-                           KEY
-                           AUTOINCREMENT,
-                           name
-                           TEXT
-                           NOT
-                           NULL,
-                           price
-                           REAL
-                           NOT
-                           NULL,
-                           available
-                           BOOLEAN
-                           DEFAULT
-                           1,
-                           created_at
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           name TEXT NOT NULL,
+                           price REAL NOT NULL,
+                           available BOOLEAN DEFAULT 1,
+                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                        )
                        ''')
 
@@ -74,45 +58,18 @@ def create_tables():
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS orders
                        (
-                           id
-                           INTEGER
-                           PRIMARY
-                           KEY
-                           AUTOINCREMENT,
-                           student_phone
-                           TEXT
-                           NOT
-                           NULL,
-                           items
-                           TEXT
-                           NOT
-                           NULL,
-                           total_amount
-                           REAL
-                           NOT
-                           NULL,
-                           status
-                           TEXT
-                           DEFAULT
-                           'pending',
-                           payment_link
-                           TEXT,
-                           payment_expires_at
-                           TEXT,
-                           pickup_code
-                           TEXT,
-                           razorpay_order_id
-                           TEXT,
-                           service_type
-                           TEXT,
-                           created_at
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP,
-                           updated_at
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           student_phone TEXT NOT NULL,
+                           items TEXT NOT NULL,
+                           total_amount REAL NOT NULL,
+                           status TEXT DEFAULT 'pending',
+                           payment_link TEXT,
+                           payment_expires_at TEXT,
+                           pickup_code TEXT,
+                           razorpay_order_id TEXT,
+                           service_type TEXT,
+                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                        )
                        ''')
 
@@ -120,26 +77,12 @@ def create_tables():
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS users
                        (
-                           id
-                           TEXT
-                           PRIMARY
-                           KEY,
-                           phone_number
-                           TEXT,
-                           session_state
-                           TEXT
-                           DEFAULT
-                           'initial',
-                           current_order_id
-                           INTEGER,
-                           created_at
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP,
-                           last_active
-                           TIMESTAMP
-                           DEFAULT
-                           CURRENT_TIMESTAMP
+                           id TEXT PRIMARY KEY,
+                           phone_number TEXT,
+                           session_state TEXT DEFAULT 'initial',
+                           current_order_id INTEGER,
+                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                           last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                        )
                        ''')
 
@@ -227,6 +170,166 @@ def add_default_menu_items():
         logging.error(f"Error adding default menu items: {e}")
         return False
 
+
+# ========== USER SESSION OPERATIONS (FIXED/ADDED) ==========
+
+def set_session_state(user_id, state, order_id=None):
+    """
+    Sets the session state and current order ID for a user.
+    Creates a new user record if it doesn't exist.
+    """
+    try:
+        conn = create_connection()
+        if not conn:
+            return False
+
+        cursor = conn.cursor()
+        
+        # Check if the user exists
+        cursor.execute('SELECT id FROM users WHERE id = ?', (user_id,))
+        if cursor.fetchone():
+            # User exists, update state
+            cursor.execute('''
+                UPDATE users
+                SET session_state = ?,
+                    current_order_id = ?,
+                    last_active = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (state, order_id, user_id))
+        else:
+            # New user, insert a record
+            cursor.execute('''
+                INSERT INTO users (id, session_state, current_order_id)
+                VALUES (?, ?, ?)
+            ''', (user_id, state, order_id))
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error(f"Error setting session state for {user_id}: {e}")
+        return False
+
+def get_session_state(user_id):
+    """Retrieves the current session state for a user."""
+    try:
+        conn = create_connection()
+        if not conn:
+            return 'initial'
+
+        cursor = conn.cursor()
+        cursor.execute('SELECT session_state FROM users WHERE id = ?', (user_id,))
+        state = cursor.fetchone()
+        conn.close()
+        return state[0] if state else 'initial'
+    except Exception as e:
+        logging.error(f"Error getting session state for {user_id}: {e}")
+        return 'initial'
+
+def get_session_order_id(user_id):
+    """Retrieves the current order ID associated with a user's session."""
+    try:
+        conn = create_connection()
+        if not conn:
+            return None
+
+        cursor = conn.cursor()
+        cursor.execute('SELECT current_order_id FROM users WHERE id = ?', (user_id,))
+        order_id = cursor.fetchone()
+        conn.close()
+        return order_id[0] if order_id and order_id[0] else None
+    except Exception as e:
+        logging.error(f"Error getting session order ID for {user_id}: {e}")
+        return None
+
+def get_user_phone(user_id):
+    """Retrieves the stored phone number for a user by their chat ID."""
+    try:
+        conn = create_connection()
+        if not conn:
+            return None
+
+        cursor = conn.cursor()
+        cursor.execute('SELECT phone_number FROM users WHERE id = ?', (user_id,))
+        phone = cursor.fetchone()
+        conn.close()
+
+        return phone[0] if phone and phone[0] else None
+    except Exception as e:
+        # This handles the case where the user record doesn't exist yet
+        return None
+    
+def update_user_phone(user_id, phone_number):
+    """Updates the phone number for a user or creates a new user if not found."""
+    try:
+        conn = create_connection()
+        if not conn:
+            return False
+
+        cursor = conn.cursor()
+        
+        # Check if the user exists
+        cursor.execute('SELECT id FROM users WHERE id = ?', (user_id,))
+        if cursor.fetchone():
+            # User exists, update the phone number
+            cursor.execute('''
+                UPDATE users
+                SET phone_number = ?,
+                    last_active = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (phone_number, user_id))
+        else:
+            # New user, insert a record with the phone number
+            cursor.execute('''
+                INSERT INTO users (id, phone_number, session_state)
+                VALUES (?, ?, 'initial')
+            ''', (user_id, phone_number))
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating phone number for {user_id}: {e}")
+        return False
+    
+def cleanup_old_sessions(days_old=30):
+    """
+    Deletes user sessions that haven't been active in the specified number of days,
+    and are not currently involved in an active order or pickup flow.
+    """
+    try:
+        conn = create_connection()
+        if not conn:
+            return 0
+
+        cursor = conn.cursor()
+
+        # Calculate the cutoff timestamp
+        # FIX: The input days_old is already an integer
+        cutoff_date = datetime.now() - timedelta(days=days_old)
+        cutoff_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Delete sessions where:
+        # 1. last_active is older than the cutoff date AND
+        # 2. They are not currently holding an order.
+        cursor.execute('''
+            DELETE FROM users
+            WHERE last_active < ?
+              AND current_order_id IS NULL
+        ''', (cutoff_str,))
+
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted_count > 0:
+            logging.info(f"🧹 Cleaned up {deleted_count} inactive user sessions older than {days_old} days.")
+
+        return deleted_count
+
+    except Exception as e:
+        logging.error(f"Error cleaning up old sessions: {e}")
+        return 0
 
 # ========== MENU OPERATIONS (Unchanged) ==========
 
@@ -368,6 +471,15 @@ def create_order(student_phone, order_details, total_amount, status='pending'):
         logging.error(f"Error creating order: {e}")
         return None
 
+def parse_order_items(items_json):
+    """Parses the items JSON string into a Python list of dictionaries."""
+    try:
+        if isinstance(items_json, str):
+            return json.loads(items_json)
+        return items_json
+    except json.JSONDecodeError as e:
+        logging.error(f"Error decoding order items JSON: {e}")
+        return []
 
 def get_order_details(order_id):
     """Get order details by ID."""
@@ -909,3 +1021,5 @@ def get_order_statistics():
     except Exception as e:
         logging.error(f"Error getting order statistics: {e}")
         return None
+
+# End of db_manager.py

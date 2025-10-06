@@ -334,10 +334,9 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
     except Exception as e:
         print(f"❌ Error generating Razorpay payment link/order: {e}")
         traceback.print_exc()
-        # Check for specific BadRequestError related to reference_id reuse
+        # CRITICAL FIX: Re-raise the specific Razorpay error so the caller can reset the session cleanly.
         if isinstance(e, razorpay.errors.BadRequestError) and "reference_id" in str(e):
-             # Re-raise the error so the caller can reset the session
-            raise razorpay.errors.BadRequestError(str(e))
+             raise razorpay.errors.BadRequestError(str(e))
         return None, None
 
 
@@ -1568,50 +1567,43 @@ def handle_inline_callbacks(call):
 
             total_amount = order['total_amount']
             
-            # --- START FIX 1: CHECK FOR EXISTING PAYMENT LINK ---
+            # --- CRITICAL FIX 1: CHECK FOR AND REUSE EXISTING PAYMENT LINK ---
             razorpay_order_id = order.get('razorpay_order_id')
             payment_link = order.get('payment_link')
             
             if razorpay_order_id and payment_link:
-                # Use existing link to avoid Razorpay error
-                print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
+                # Reuse existing link and skip creation logic
+                print(f"💰 Reusing existing Razorpay Payment Link for Order #{current_order_id}")
+                
             else:
                 # Generate new link only if none exists
                 try:
                     razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                
+                # CATCH THE RAZORPAY BAD REQUEST (Reference ID conflict)
+                except razorpay.errors.BadRequestError as e:
+                    print(f"❌ Razorpay Conflict Error or Bad Request: {e}. Forcing session reset.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    # Use bot.send_message for a new, clean reply to avoid the 400 edit error
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Payment link error (Order ID conflict). The session has been reset. Please tap 'Menu 🍽️' to start a *new* order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
+                # CATCH CONNECTION ERROR
                 except requests.exceptions.ConnectionError:
                     print("❌ Network connection failed during Razorpay link generation. Resetting session.")
                     db_manager.set_session_state(student_db_id, 'initial', None)
-                    try:
-                        bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
-                            reply_markup=get_main_reply_keyboard()
-                        )
-                    except telebot.apihelper.ApiTelegramException as e:
-                        if "message is not modified" not in str(e):
-                            raise
+                    # Use bot.send_message for a new, clean reply
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
                     return
-                # FIX PAYMENT ERROR: Catching the specific Razorpay Bad Request error here
-                except razorpay.errors.BadRequestError as e:
-                    if "reference_id" in str(e):
-                        print(f"❌ Razorpay Conflict Error: {e}. Forcing session reset.")
-                        db_manager.set_session_state(student_db_id, 'initial', None)
-                        try:
-                            bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=message_id,
-                                text="❌ Payment link error (Order ID conflict). Please tap 'Menu 🍽️' to start a *new* order.",
-                                reply_markup=get_main_reply_keyboard()
-                            )
-                        except telebot.apihelper.ApiTelegramException as e:
-                            if "message is not modified" not in str(e):
-                                raise
-                        return
-                    else:
-                        raise # Re-raise other unknown BadRequestErrors
-            # --- END FIX 1 ---
+                
+            # --- END CRITICAL FIX 1 ---
 
             if razorpay_order_id and payment_link:
                 # Only update DB if a *new* link was generated or if details were missing
@@ -1622,9 +1614,7 @@ def handle_inline_callbacks(call):
 
                 payment_keyboard = create_payment_keyboard(payment_link, current_order_id)
                 
-                # --- START FIX 2: Check if file exists before using open() (though usually fine on Render) ---
                 payment_qr_path = generate_payment_qr_code(payment_link, current_order_id)
-                # --- END FIX 2 ---
 
 
                 payment_msg = (
@@ -1635,8 +1625,7 @@ def handle_inline_callbacks(call):
                     f"Status updates automatically after payment."
                 )
 
-                # Edit the confirmation message to display the payment QR/Link
-                # We need to wrap this in a try-except to handle the 400 error cleanly.
+                # Edit the confirmation message to display a generating message
                 try:
                     bot.edit_message_text(
                         chat_id=chat_id,
@@ -1645,13 +1634,12 @@ def handle_inline_callbacks(call):
                         reply_markup=None  # Remove old buttons first
                     )
                 except telebot.apihelper.ApiTelegramException as e:
-                    # Ignore the "message is not modified" error which can happen if the previous edit failed
                     if "message is not modified" not in str(e):
                         print(f"⚠️ Edit message failed before QR send: {e}")
                         pass
                 
+                # Send the final payment message (new message to ensure delivery)
                 if payment_qr_path:
-                    # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
                     with open(payment_qr_path, 'rb') as photo:
                         bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
                                        reply_markup=payment_keyboard)
@@ -1661,15 +1649,13 @@ def handle_inline_callbacks(call):
                 db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
                 return
             else:
-                # This catches Razorpay internal errors or invalid response
+                # This catches Razorpay internal errors or invalid response where no link was generated
                 db_manager.set_session_state(student_db_id, 'initial', None)
-                bot.edit_message_text(
+                bot.send_message(
                     chat_id=chat_id,
-                    message_id=message_id,
-                    text="❌ Could not generate payment link. Please try again or contact support.",
-                    reply_markup=None
+                    text="❌ Could not generate payment link. Please tap 'Menu 🍽️' to try again.",
+                    reply_markup=get_main_reply_keyboard()
                 )
-                bot.send_message(chat_id, "Tap 'Menu 🍽️' to try again.", reply_markup=get_main_reply_keyboard())
                 return
 
 
@@ -1679,10 +1665,10 @@ def handle_inline_callbacks(call):
         traceback.print_exc()
         # Fallback: Send a message to restart the flow
         try:
+            # Send the generic error message you saw in the screenshot
             error_message = "❌ An internal error occurred! Please tap 'Menu 🍽️' to restart the flow."
             bot.send_message(chat_id, error_message, reply_markup=get_main_reply_keyboard())
         except Exception:
-            # If sending the message fails, the connection is totally dead.
             pass
 
 

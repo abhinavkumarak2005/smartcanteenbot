@@ -681,10 +681,10 @@ def delete_all_orders_up_to_date(cutoff_date: datetime):
         # 2. CRITICAL FIX: Reset the SQLite sequence counter if records were deleted
         if deleted_count > 0:
             cursor.execute('''
-                               UPDATE sqlite_sequence
-                               SET seq = 0
-                               WHERE name = 'orders'
-                               ''')
+                           UPDATE sqlite_sequence
+                           SET seq = 0
+                           WHERE name = 'orders'
+                           ''')
 
         conn.commit()
         conn.close()
@@ -872,195 +872,40 @@ def archive_and_reset_daily_orders():
         return 0
 
 
-# --- User Session/Phone Management ---
-
-def update_user_phone(student_id, phone_number):
-    """Stores the collected phone number in the users table."""
-    try:
-        conn = create_connection()
-        if not conn:
-            return False
-
-        cursor = conn.cursor()
-
-        # 1. Get current state/order (if user exists)
-        cursor.execute("SELECT session_state, current_order_id FROM users WHERE id = ?", (student_id,))
-        result = cursor.fetchone()
-
-        state = result['session_state'] if result else 'initial'
-        order_id = result['current_order_id'] if result else None
-
-        # 2. INSERT OR REPLACE with the new phone number, keeping old state/order_id
-        cursor.execute('''
-            INSERT OR REPLACE INTO users 
-            (id, phone_number, session_state, current_order_id, last_active)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (student_id, phone_number, state, order_id))
-
-        conn.commit()
-        conn.close()
-        logging.info(f"Phone number updated for user {student_id}")
-        return True
-
-    except Exception as e:
-        logging.error(f"Error updating phone number: {e}")
-        return False
-
-
-def get_user_phone(student_id):
-    """Retrieves the stored phone number for the user."""
+def get_order_statistics():
+    """Calculates and returns key statistics for the admin dashboard."""
     try:
         conn = create_connection()
         if not conn:
             return None
 
         cursor = conn.cursor()
-        cursor.execute('SELECT phone_number FROM users WHERE id = ?', (student_id,))
-        result = cursor.fetchone()
+
+        # 1. Total Orders and Revenue
+        # Note: Filter by 'paid' and 'delivered' status for actual revenue calculation
+        cursor.execute('SELECT COUNT(id), SUM(total_amount) FROM orders WHERE status IN ("paid", "delivered")')
+        total_orders, total_revenue = cursor.fetchone()
+
+        # 2. Today's Orders
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('SELECT COUNT(id) FROM orders WHERE created_at >= ? AND status IN ("paid", "delivered")', (today_start,))
+        today_orders = cursor.fetchone()[0]
+
+        # 3. Orders by Status
+        cursor.execute('SELECT status, COUNT(id) FROM orders GROUP BY status')
+        # Ensure the status mapping is correct based on how status is stored
+        status_counts = {row['status']: row['COUNT(id)'] for row in cursor.fetchall()}
+
         conn.close()
-        return result['phone_number'] if result and result['phone_number'] else None
+
+        # Ensure return values are safe (handle None if SUM is over zero rows)
+        return {
+            'total_orders': total_orders or 0,
+            'total_revenue': total_revenue or 0.0,
+            'today_orders': today_orders or 0,
+            'status_counts': status_counts
+        }
 
     except Exception as e:
-        logging.error(f"Error retrieving phone number: {e}")
+        logging.error(f"Error getting order statistics: {e}")
         return None
-
-
-# ========== SESSION MANAGEMENT (using 'users' table) ==========
-
-def get_session_state(user_id):
-    """Get user session state."""
-    MAX_RETRIES = 5
-    for attempt in range(MAX_RETRIES):
-        try:
-            conn = create_connection()
-            if not conn:
-                return 'initial'
-
-            cursor = conn.cursor()
-            # Ensure user exists first, if not, create a basic entry
-            cursor.execute("INSERT OR IGNORE INTO users (id, session_state) VALUES (?, ?)",
-                           (user_id, 'initial'))
-            conn.commit()  # Commit the insert if it happened
-
-            cursor.execute('SELECT session_state FROM users WHERE id = ?', (user_id,))
-            result = cursor.fetchone()
-            conn.close()
-
-            return result['session_state'] if result else 'initial'
-
-        except sqlite3.OperationalError as e:
-            if 'database is locked' in str(e) and attempt < MAX_RETRIES - 1:
-                time.sleep(0.2)
-            else:
-                logging.error(f"Final Error getting session state: {e}")
-                return 'initial'
-        except Exception as e:
-            logging.error(f"Error getting session state: {e}")
-            return 'initial'
-
-
-def set_session_state(user_id, state, order_id=None):
-    """Set user session state with a retry mechanism for database locks."""
-    MAX_RETRIES = 5
-    for attempt in range(MAX_RETRIES):
-        try:
-            conn = create_connection()
-            if not conn:
-                return False
-
-            cursor = conn.cursor()
-
-            # Use a two-step approach for robustness, ensuring the user exists first
-            cursor.execute("INSERT OR IGNORE INTO users (id, session_state) VALUES (?, ?)",
-                           (user_id, 'initial'))
-
-            cursor.execute('''
-                           UPDATE users
-                           SET session_state    = ?,
-                               current_order_id = ?,
-                               last_active      = CURRENT_TIMESTAMP
-                           WHERE id = ?
-                           ''', (state, order_id, user_id))
-
-            conn.commit()
-            conn.close()
-            return True
-
-        except sqlite3.OperationalError as e:
-            if 'database is locked' in str(e) and attempt < MAX_RETRIES - 1:
-                time.sleep(0.3)
-            else:
-                logging.error(f"Final Error setting session state: {e}")
-                return False
-        except Exception as e:
-            logging.error(f"Error setting session state: {e}")
-            return False
-
-
-def get_session_order_id(user_id):
-    """Get current order ID from session."""
-    MAX_RETRIES = 5
-    for attempt in range(MAX_RETRIES):
-        try:
-            conn = create_connection()
-            if not conn:
-                return None
-
-            cursor = conn.cursor()
-            cursor.execute('SELECT current_order_id FROM users WHERE id = ?', (user_id,))
-            result = cursor.fetchone()
-            conn.close()
-
-            return result['current_order_id'] if result and result['current_order_id'] is not None else None
-
-        except sqlite3.OperationalError as e:
-            if 'database is locked' in str(e) and attempt < MAX_RETRIES - 1:
-                time.sleep(0.2)
-            else:
-                logging.error(f"Final Error getting session order ID: {e}")
-                return None
-        except Exception as e:
-            logging.error(f"Error getting session order ID: {e}")
-            return None
-
-
-def cleanup_old_sessions(days_old=7):
-    """Clean up old user sessions."""
-    try:
-        conn = create_connection()
-        if not conn:
-            return False
-
-        cursor = conn.cursor()
-        # Ensure proper syntax for date calculation
-        cursor.execute('''
-            DELETE FROM users 
-            WHERE last_active < datetime('now', '-%d days')
-        ''' % days_old)
-
-        deleted_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        if deleted_count > 0:
-            logging.info(f"🧹 Cleaned up {deleted_count} old sessions")
-
-        return True
-
-    except Exception as e:
-        logging.error(f"Error cleaning up old sessions: {e}")
-        return False
-
-
-# --- UTILITY FUNCTION FOR ORDER ITEMS ---
-def parse_order_items(items_json):
-    """Parse order items from JSON string."""
-    try:
-        if isinstance(items_json, str) and items_json:
-            return json.loads(items_json)
-        elif isinstance(items_json, list):
-            return items_json
-        else:
-            return []
-    except (json.JSONDecodeError, TypeError):
-        return []

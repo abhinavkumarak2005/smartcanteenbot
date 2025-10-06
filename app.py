@@ -334,10 +334,10 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
         return razorpay_order_id, payment_url
 
     except Exception as e:
-        print(f"❌ Error generating Razorpay payment link/order: {e}")
+        # Added extra logging for the reference ID before raising
+        print(f"❌ Error generating Razorpay payment link/order (Ref ID: {unique_reference_id}): {e}")
         traceback.print_exc()
-        # CRITICAL FIX: We no longer need to check for the reference_id conflict here, 
-        # as the UUID should prevent it. We only raise other BadRequestErrors.
+        # CRITICAL FIX: We re-raise the BadRequestError to be handled in the caller.
         if isinstance(e, razorpay.errors.BadRequestError):
              raise razorpay.errors.BadRequestError(str(e))
         return None, None

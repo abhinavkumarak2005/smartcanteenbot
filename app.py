@@ -1582,24 +1582,32 @@ def handle_inline_callbacks(call):
                 except requests.exceptions.ConnectionError:
                     print("❌ Network connection failed during Razorpay link generation. Resetting session.")
                     db_manager.set_session_state(student_db_id, 'initial', None)
-                    bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
-                        reply_markup=get_main_reply_keyboard()
-                    )
+                    try:
+                        bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                            reply_markup=get_main_reply_keyboard()
+                        )
+                    except telebot.apihelper.ApiTelegramException as e:
+                        if "message is not modified" not in str(e):
+                            raise
                     return
                 # FIX PAYMENT ERROR: Catching the specific Razorpay Bad Request error here
                 except razorpay.errors.BadRequestError as e:
                     if "reference_id" in str(e):
                         print(f"❌ Razorpay Conflict Error: {e}. Forcing session reset.")
                         db_manager.set_session_state(student_db_id, 'initial', None)
-                        bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text="❌ Payment link error (Order ID conflict). Please tap 'Menu 🍽️' to start a *new* order.",
-                            reply_markup=get_main_reply_keyboard()
-                        )
+                        try:
+                            bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=message_id,
+                                text="❌ Payment link error (Order ID conflict). Please tap 'Menu 🍽️' to start a *new* order.",
+                                reply_markup=get_main_reply_keyboard()
+                            )
+                        except telebot.apihelper.ApiTelegramException as e:
+                            if "message is not modified" not in str(e):
+                                raise
                         return
                     else:
                         raise # Re-raise other unknown BadRequestErrors
@@ -1744,14 +1752,14 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
             except telebot.apihelper.ApiTelegramException as e:
                 # FIX 400 Error on start_menu_flow
                 if "message is not modified" not in str(e) and "message can't be edited" not in str(e):
-                    raise
-                # Fallback to sending a new message if edit fails for any non-400 reason
-                bot.send_message(
-                    chat_id=chat_id,
-                    text=main_message,
-                    parse_mode='Markdown',
-                    reply_markup=get_menu_inline_keyboard(student_db_id)
-                )
+                    # Fallback to sending a new message if edit fails for any non-400 reason
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text=main_message,
+                        parse_mode='Markdown',
+                        reply_markup=get_menu_inline_keyboard(student_db_id)
+                    )
+                
         else:
             bot.send_message(
                 chat_id=chat_id,
@@ -1921,7 +1929,6 @@ if __name__ == '__main__':
     if 'GUNICORN_PID' in os.environ:
         # 1. WEB SERVICE MODE (Gunicorn runs 'gunicorn app:app')
         print("🌐 Running in Web Service Mode (Gunicorn).")
-        # No polling, no threads, just let Gunicorn serve the Flask 'app' instance.
         # Gunicorn handles Flask startup. Polling logic is never reached.
     
     else:
@@ -1935,4 +1942,10 @@ if __name__ == '__main__':
         time.sleep(1)
         
         # Run the dedicated polling function
-        run_polling_service()
+        try:
+            run_polling_service()
+        except KeyboardInterrupt:
+            print("\n🛑 Bot stopped by user.")
+        except Exception as e:
+            print(f"❌ Error during application startup: {e}")
+            traceback.print_exc()

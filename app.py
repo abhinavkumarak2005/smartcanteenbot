@@ -1868,7 +1868,6 @@ def run_polling_service():
 
     # Perform ALL setup required for this dedicated polling service
     print("\n🔧 Initializing Database and Cleanup...")
-    # NOTE: This initialization MUST run in the polling service to guarantee setup on Render Worker
     
     # 1. Aggressive reset and table creation
     if db_manager.aggressive_db_reset():
@@ -1908,15 +1907,15 @@ def run_polling_service():
 
 # --- FLASK SERVER & BOT STARTUP ---
 
-# CRITICAL FIX: The Flask server function must be separate and simple for Gunicorn
+# CRITICAL FIX: The Flask server function must be separate and simple for threading
 def run_flask():
-    """Runs Flask in a thread for Hybrid mode, or is the entry point for Gunicorn."""
+    """Runs Flask in a thread."""
     PORT = int(os.environ.get("PORT", 5001))
     print(f"🌐 Starting Flask server on port {PORT}...")
-    # This function is called by Gunicorn for the Web Service, or in a thread for Hybrid.
+    # NOTE: We use threaded=True for local testing, but deployment environment might ignore this
     app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
-# Call setup_flask_routes here so that Gunicorn always loads all routes.
+# Call setup_flask_routes here so that Flask loads all routes.
 setup_flask_routes()
 
 
@@ -1925,27 +1924,19 @@ if __name__ == '__main__':
         print("\n🛑 Application setup incomplete. Check .env file.")
         exit(1)
 
-    # Determine if running under Gunicorn (Web Service) or directly (Polling/Hybrid Service)
-    if 'GUNICORN_PID' in os.environ:
-        # 1. WEB SERVICE MODE (Gunicorn runs 'gunicorn app:app')
-        print("🌐 Running in Web Service Mode (Gunicorn).")
-        # Gunicorn handles Flask startup. Polling logic is never reached.
+    # 2. HYBRID/SINGLE-SERVICE MODE (python app.py)
+    print("\n🔧 Starting Single-Service Bot (Polling + Flask Thread)...")
     
-    else:
-        # 2. HYBRID/POLLING MODE (python app.py)
-        # This is the dedicated polling service's entry point.
-        print("\n🔧 Starting Hybrid Polling Service...")
-        
-        # Start Flask in a separate thread for local/hybrid development
-        flask_thread = threading.Thread(target=run_flask, daemon=True)
-        flask_thread.start()
-        time.sleep(1)
-        
-        # Run the dedicated polling function
-        try:
-            run_polling_service()
-        except KeyboardInterrupt:
-            print("\n🛑 Bot stopped by user.")
-        except Exception as e:
-            print(f"❌ Error during application startup: {e}")
-            traceback.print_exc()
+    # Start Flask in a separate thread for webhooks/QR page
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    time.sleep(1)
+    
+    # Run the dedicated polling function in the main thread
+    try:
+        run_polling_service()
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped by user.")
+    except Exception as e:
+        print(f"❌ Error during application startup: {e}")
+        traceback.print_exc()

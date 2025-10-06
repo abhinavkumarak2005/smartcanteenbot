@@ -1796,30 +1796,33 @@ def start_cleanup_thread():
     print("🧹 Started background cleanup thread (runs every 5 minutes, checking for daily reset)")
 
 
-# --- TELEGRAM BOT POLLING FUNCTION (RESTORED) ---
-def run_bot():
-    """Starts the Telegram bot polling loop."""
-    print("\n🚀 Starting Telegram Bot Polling...")
+# --- TELEGRAM BOT POLLING FUNCTION (CRITICALLY MODIFIED) ---
+def run_polling_service():
+    """Starts the Telegram bot polling loop in its own dedicated service/process."""
+    print("\n🚀 Starting Telegram Bot Polling Service...")
     print("    📡 Bot is now listening for messages...")
     print("    ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
     # CRITICAL FIX: Clear any active webhook before starting polling
     try:
-        # NOTE: Even if webhook is already deleted, the 409 conflict can still occur if two threads try to poll simultaneously.
         if bot.delete_webhook():
             print("✅ Successfully cleared existing Telegram webhook.")
     except Exception as e:
         print(f"⚠️ Warning: Could not delete webhook on startup: {e}")
 
-    # Check for Gunicorn environment variable (GUNICORN_PID is set in Gunicorn/Web service mode)
-    if 'GUNICORN_PID' in os.environ:
-        print("⚠️ Gunicorn detected. Skipping run_bot() to prevent Code 409 conflict.")
-        return
+    # Perform setup required for polling service
+    print("\n🔧 Initializing Database and Cleanup...")
+    db_manager.create_tables()
+    db_manager.add_default_menu_items()
+    db_manager.archive_and_reset_daily_orders()
+    db_manager.cleanup_old_sessions() 
+
+    start_cleanup_thread()
+    print("=" * 50)
 
     while True:
         try:
-            # Note: Changed from none_stop to non_stop to address deprecation warning
             bot.polling(non_stop=True, interval=3)
         except Exception as e:
             print(f"❌ Polling failed due to fatal error: {e}. Retrying in 5 seconds...")
@@ -1829,90 +1832,88 @@ def run_bot():
 
 # --- FLASK SERVER & BOT STARTUP (FIXED) ---
 
-# We remove the run_flask function and the manual threading to avoid conflicts.
-# The Gunicorn command in the Web Service handles the web server part.
-# The 'python app.py' command in the Polling Service handles the bot and threads.
+# CRITICAL FIX: The Flask server function must be separate and simple for Gunicorn
+def run_flask():
+    """Starts the Flask server bound to the required PORT."""
+    PORT = int(os.environ.get("PORT", 5001))
+    print(f"🌐 Starting Flask server on port {PORT}...")
+    # NOTE: In a Gunicorn environment, app.run() is not called.
+    # When running locally (Hybrid mode), this will run in a separate thread.
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
 # CRITICAL FIX: Call setup_flask_routes here so that Gunicorn always loads all routes.
 setup_flask_routes()
 
-# --- NEW: RUN FLASK SERVER IN A THREAD (FOR SINGLE SERVICE MODE) ---
-def run_flask():
-    """Starts the Flask server in a separate thread, bound to the PORT environment variable."""
-    # Render requires the app to bind to the port defined by its environment.
-    # We use 5001 as a fallback for local testing, but it will use the Render-assigned port.
-    PORT = int(os.environ.get("PORT", 5001))
-    print(f"🌐 Starting Flask server in background thread on port {PORT}...")
-    # NOTE: We must disable Flask's reloader when running in a thread/production environment
-    try:
-        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
-    except Exception as e:
-        print(f"❌ Critical Error: Could not start Flask thread on port {PORT}: {e}")
-        # The main thread (polling) will continue to run even if the Flask thread fails to bind.
 
 if __name__ == '__main__':
     if not os.getenv('BOT_TOKEN') or not RAZORPAY_CLIENT:
         print("\n🛑 Application setup incomplete. Check .env file.")
         exit(1)
 
-    # Check if we are being run by Gunicorn (Web Service) or directly (Polling Service)
-    # Gunicorn sets the GUNICORN_PID environment variable.
-    # If GUNICORN_PID is set, we are running as the Web Service.
+    # Determine if running under Gunicorn (Web Service) or directly (Polling/Hybrid Service)
     if 'GUNICORN_PID' in os.environ:
-        print("🌐 Running in Web Service Mode (Gunicorn). Skipping Polling/Threads setup.")
-        # All routes are already set up above. No further startup is needed for the Web Service.
+        # 1. WEB SERVICE MODE (Gunicorn runs 'gunicorn app:app')
+        print("🌐 Running in Web Service Mode (Gunicorn).")
+        # No polling, no threads, just let Gunicorn serve the Flask 'app' instance.
+        # This block intentionally does nothing but print a message.
     
-    # If GUNICORN_PID is NOT set, we are running as the Hybrid/Polling Service (python app.py)
     else:
-        print("\n🔧 Initializing Telegram Canteen Bot (Hybrid Service Mode)...")
-        print("=" * 50)
+        # 2. HYBRID/POLLING MODE (python app.py)
+        print("\n🔧 Initializing Telegram Canteen Bot (Hybrid Mode)...")
         
-        # --- AGGRESSIVE DB RESET ---
-        # NOTE: This call forces a fresh start and resets the order ID counter.
+        # --- AGGRESSIVE DB RESET / INITIAL SETUP (Only needed once per deployment) ---
         if db_manager.aggressive_db_reset():
             print("✅ Database file reset successful.")
         
-        print("🗃️  Setting up database...")
-        if db_manager.create_tables():
-            print("✅ Database tables created/verified successfully!")
-            db_manager.add_default_menu_items()
-
-            print("\n⏳ Running startup check for daily order archive and reset...")
-            db_manager.archive_and_reset_daily_orders()
-            print("-" * 50)
-
-        else:
+        print("🗃️  Setting up database tables and default data...")
+        if not db_manager.create_tables():
             print("❌ Database initialization failed!")
             exit(1)
+        db_manager.add_default_menu_items()
         
-        # --- START FLASK THREAD ---
+        # --- START FLASK THREAD (for webhooks/QR page) ---
+        # Note: If running on a platform with separate processes for web/worker, 
+        # this thread should be REMOVED from the worker process, and the web 
+        # process should solely run Gunicorn. Since the user asked for a total code fix,
+        # we maintain the thread for hybrid/local testing compatibility.
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        time.sleep(1) # Give the server a moment to bind
+        
+        # --- START POLLING AND CLEANUP ---
+        # We wrap the core polling logic into a new entry point for clarity,
+        # but for the 409 error, the simple fix is to ensure the polling starts here.
+        
+        print("\nRunning daily archive and starting core bot logic...")
+        
+        # The polling service now runs ALL remaining bot logic (cleanup, polling loop)
         try:
-            flask_thread = threading.Thread(target=run_flask, daemon=True)
-            flask_thread.start()
-            time.sleep(1) # Give the server a moment to bind to the port
-        except Exception as e:
-            print(f"❌ Critical Error: Could not start Flask thread: {e}")
-            # Do not exit, as polling might still work, but webhooks will fail.
+            # We explicitly run the initialization steps here before polling starts
+            db_manager.archive_and_reset_daily_orders()
+            db_manager.cleanup_old_sessions()
+            start_cleanup_thread() # Start the persistent cleanup thread
+            
+            print("\nStarting bot polling loop...")
+            
+            # The actual polling loop
+            while True:
+                try:
+                    # Clear webhook *before* starting polling
+                    bot.delete_webhook() 
+                    bot.polling(non_stop=True, interval=3)
+                except telebot.apihelper.ApiTelegramException as e:
+                    print(f"❌ Telegram API Error: {e}. Retrying in 5 seconds...")
+                    time.sleep(5)
+                except Exception as e:
+                    print(f"❌ Fatal Polling Error: {e}. Retrying in 5 seconds...")
+                    time.sleep(5)
+                except KeyboardInterrupt:
+                    break
 
-        start_cleanup_thread()
-        db_manager.cleanup_old_sessions() # Aggressively clean up sessions before starting bot
-
-        print("\n🔧 Bot Configuration:")
-        print(f"    👤 Payee Name: {PAYEE_NAME}")
-        print(f"    👨‍💼 Admin Chat IDs: {ADMIN_CHAT_IDS}")
-        print(f"    🌐 Webhook URL: {BOT_PUBLIC_URL}/razorpay/webhook")
-        print(f"    💾 Database: {db_manager.DATABASE_PATH}")
-
-        print("=" * 50)
-
-        # The run_bot function contains the actual polling loop
-        try:
-            run_bot()
         except KeyboardInterrupt:
             print("\n🛑 Bot stopped by user.")
         except Exception as e:
-            print(f"❌ Error starting application: {e}")
+            print(f"❌ Error during application startup: {e}")
             traceback.print_exc()
 
 # The Flask application object 'app' must be at the top level for Gunicorn to find it.
-# We do not need a final else/catch block outside of the polling run.

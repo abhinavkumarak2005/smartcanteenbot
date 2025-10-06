@@ -1876,6 +1876,7 @@ def run_polling_service():
     # The actual polling loop, with error handling for the 409 conflict
     while True:
         try:
+            # Added a retry mechanism directly inside the polling loop to handle transient 409s
             bot.polling(non_stop=True, interval=3)
         except telebot.apihelper.ApiTelegramException as e:
             # Re-check the 409 conflict error (should be rare now)
@@ -1899,6 +1900,7 @@ def run_flask():
     PORT = int(os.environ.get("PORT", 5001))
     print(f"🌐 Starting Flask server on port {PORT}...")
     # NOTE: We use threaded=True for local testing, but deployment environment might ignore this
+    # The debug=False is crucial for production stability
     app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
 # Call setup_flask_routes here so that Flask loads all routes.

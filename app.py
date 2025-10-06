@@ -1085,11 +1085,11 @@ def handle_incoming_message(message: Message):
 
             # Handle all admin text commands (menu management AND new view commands)
             if incoming_msg_lower.startswith(('add ', 'update ', 'delete ')) or incoming_msg_lower in ['/todayorders',
-                                                                                                       '/today',
-                                                                                                       '/liveorders',
-                                                                                                       '/viewarchive',
-                                                                                                       '/archive',
-                                                                                                       '/history']:
+                                                                                                      '/today',
+                                                                                                      '/liveorders',
+                                                                                                      '/viewarchive',
+                                                                                                      '/archive',
+                                                                                                      '/history']:
                 handle_admin_text_commands(incoming_msg_lower, from_chat_id)
                 return
 
@@ -1800,8 +1800,8 @@ def start_cleanup_thread():
 def run_bot():
     """Starts the Telegram bot polling loop."""
     print("\n🚀 Starting Telegram Bot Polling...")
-    print("   📡 Bot is now listening for messages...")
-    print("   ⏹️  Press Ctrl+C to stop\n")
+    print("    📡 Bot is now listening for messages...")
+    print("    ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
     # CRITICAL FIX: Clear any active webhook before starting polling
@@ -1898,10 +1898,10 @@ if __name__ == '__main__':
         db_manager.cleanup_old_sessions() # Aggressively clean up sessions before starting bot
 
         print("\n🔧 Bot Configuration:")
-        print(f"   👤 Payee Name: {PAYEE_NAME}")
-        print(f"   👨‍💼 Admin Chat IDs: {ADMIN_CHAT_IDS}")
-        print(f"   🌐 Webhook URL: {BOT_PUBLIC_URL}/razorpay/webhook")
-        print(f"   💾 Database: {db_manager.DATABASE_PATH}")
+        print(f"    👤 Payee Name: {PAYEE_NAME}")
+        print(f"    👨‍💼 Admin Chat IDs: {ADMIN_CHAT_IDS}")
+        print(f"    🌐 Webhook URL: {BOT_PUBLIC_URL}/razorpay/webhook")
+        print(f"    💾 Database: {db_manager.DATABASE_PATH}")
 
         print("=" * 50)
 

@@ -55,13 +55,10 @@ RAZORPAY_CLIENT = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 print("✅ Razorpay Client initialized.")
 
 # --- TELEGRAM SETUP ---
-# Initialize bot here for webhooks only. Handlers must be defined later.
-# We will fully initialize the polling bot inside the if __name__ == '__main__': block.
 print(f"✅ Telegram Bot Token loaded successfully.")
 try:
     logger = telebot.logger
     telebot.logger.setLevel(logging.INFO)
-    # The 'bot' object is defined but not yet started/polled.
     bot = telebot.TeleBot(TOKEN)
 except Exception as e:
     print(f"❌ Error initializing TeleBot: {e}")
@@ -78,8 +75,7 @@ app = Flask(__name__)
 
 def setup_flask_routes():
     """Registers all necessary Flask routes to prevent AssertionError."""
-
-    # NOTE: This function is called only once when the Flask app is loaded by Gunicorn.
+    # NOTE: This is called on script load and before main execution.
 
     @app.route('/order_success', methods=['GET'])
     def order_success():
@@ -218,10 +214,10 @@ def setup_flask_routes():
         <html lang="en">
         <head>
             <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Order #{order_id} Ticket</title>
             <style>
-                body {{ font-family: sans-serif; background-color: #f7f7f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px 0; }}
+                body {{ font-family: sans-serif; text-align: center; background-color: #f7f7f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px 0; }}
                 .ticket {{ 
                     width: 90%; max-width: 500px; background-color: #fff; border: 3px solid #ccc; 
                     border-radius: 15px; padding: 25px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);
@@ -338,6 +334,10 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
     except Exception as e:
         print(f"❌ Error generating Razorpay payment link/order: {e}")
         traceback.print_exc()
+        # Check for specific BadRequestError related to reference_id reuse
+        if isinstance(e, razorpay.errors.BadRequestError) and "reference_id" in str(e):
+             # Re-raise the error so the caller can reset the session
+            raise razorpay.errors.BadRequestError(str(e))
         return None, None
 
 
@@ -1050,7 +1050,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             archive_text += (
                 f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
-                f"   - Items: {item_summary}\n"
+                f"  - Items: {item_summary}\n"
             )
 
         # back_to_orders_instruct points to the order instructions panel.
@@ -1551,7 +1551,32 @@ def handle_inline_callbacks(call):
                 print(f"💰 Using existing Razorpay Payment Link for Order #{current_order_id}")
             else:
                 # Generate new link only if none exists
-                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                try:
+                    razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                except requests.exceptions.ConnectionError:
+                    print("❌ Network connection failed during Razorpay link generation. Resetting session.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
+                # FIX PAYMENT ERROR: Catching the specific Razorpay Bad Request error here
+                except razorpay.errors.BadRequestError as e:
+                    if "reference_id" in str(e):
+                        print(f"❌ Razorpay Conflict Error: {e}. Forcing session reset.")
+                        db_manager.set_session_state(student_db_id, 'initial', None)
+                        bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="❌ Payment link error (Order ID conflict). Please tap 'Menu 🍽️' to start a *new* order.",
+                            reply_markup=get_main_reply_keyboard()
+                        )
+                        return
+                    else:
+                        raise # Re-raise other unknown BadRequestErrors
             # --- END FIX 1 ---
 
             if razorpay_order_id and payment_link:
@@ -1595,13 +1620,14 @@ def handle_inline_callbacks(call):
                 db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
                 return
             else:
+                # This catches Razorpay internal errors or invalid response
+                db_manager.set_session_state(student_db_id, 'initial', None)
                 bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
                     text="❌ Could not generate payment link. Please try again or contact support.",
                     reply_markup=None
                 )
-                db_manager.set_session_state(student_db_id, 'initial', None)
                 bot.send_message(chat_id, "Tap 'Menu 🍽️' to try again.", reply_markup=get_main_reply_keyboard())
                 return
 

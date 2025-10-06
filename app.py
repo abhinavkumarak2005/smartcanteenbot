@@ -725,7 +725,7 @@ def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, qua
                 reply_markup=get_add_more_inline_keyboard()
             )
         except telebot.apihelper.ApiTelegramException as e:
-            if "message can't be edited" in str(e):
+            if "message can't be edited" in str(e) or "message is not modified" in str(e):
                 bot.send_message(
                     chat_id=chat_id,
                     text=summary_msg,
@@ -1367,12 +1367,18 @@ def handle_inline_callbacks(call):
 
             reply_markup = get_admin_reply_keyboard() if chat_id in ADMIN_CHAT_IDS else get_main_reply_keyboard()
 
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text="❌ Order cancelled. Tap 'Menu 🍽️' below to start a new order.",
-                reply_markup=None  # Remove inline buttons
-            )
+            # FIX 400 ERROR: Use try-except to handle the "message is not modified" error
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Order cancelled. Tap 'Menu 🍽️' below to start a new order.",
+                    reply_markup=None  # Remove inline buttons
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
+            
             bot.send_message(chat_id, "Menu options are available below.", reply_markup=get_main_reply_keyboard())
             return
 
@@ -1402,14 +1408,18 @@ def handle_inline_callbacks(call):
                 return
 
             # Edit message to show quantity buttons
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=f"📦 You selected *{item['name'].title()}* (₹{item['price']:.2f}).\n\n"
-                     f"Please select the **quantity** required for this item:",
-                parse_mode='Markdown',
-                reply_markup=get_quantity_inline_keyboard(item_id)
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"📦 You selected *{item['name'].title()}* (₹{item['price']:.2f}).\n\n"
+                         f"Please select the **quantity** required for this item:",
+                    parse_mode='Markdown',
+                    reply_markup=get_quantity_inline_keyboard(item_id)
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
 
         # 2. QUANTITY SELECTION (BUTTON): data='qty:<item_id>:<quantity>'
@@ -1431,15 +1441,19 @@ def handle_inline_callbacks(call):
             db_manager.set_session_state(student_db_id, f'awaiting_typed_quantity_{item_id}', current_order_id)
 
             # Edit the message to show the prompt for typing
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=f"✍️ Please **type the quantity** you require for *{item['name'].title()}* (e.g., `8`).",
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ Back to Menu", callback_data="menu_start")]
-                ])
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"✍️ Please **type the quantity** you require for *{item['name'].title()}* (e.g., `8`).",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("↩️ Back to Menu", callback_data="menu_start")]
+                    ])
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
 
 
@@ -1460,13 +1474,17 @@ def handle_inline_callbacks(call):
             db_manager.set_session_state(student_db_id, 'awaiting_service_type', current_order_id)
             
             # Show checkout message
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text="🍴 **Checkout:** How would you like your order?",
-                parse_mode='Markdown',
-                reply_markup=get_service_type_inline_keyboard()
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="🍴 **Checkout:** How would you like your order?",
+                    parse_mode='Markdown',
+                    reply_markup=get_service_type_inline_keyboard()
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
 
         # 4. SERVICE TYPE SELECTION: data='service:<type>'
@@ -1491,12 +1509,16 @@ def handle_inline_callbacks(call):
                 # Send prompt for contact info
                 prompt_for_phone_number(student_db_id, chat_id)
                 # Edit the previous bot message to remove the inline buttons
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text="⌛️ Waiting for contact number...",
-                    reply_markup=None
-                )
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⌛️ Waiting for contact number...",
+                        reply_markup=None
+                    )
+                except telebot.apihelper.ApiTelegramException as e:
+                    if "message is not modified" not in str(e):
+                        raise
                 return
 
             items_list = db_manager.parse_order_items(order['items'])
@@ -1518,13 +1540,17 @@ def handle_inline_callbacks(call):
             )
 
             db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=confirmation_msg,
-                parse_mode='Markdown',
-                reply_markup=get_confirmation_inline_keyboard()
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=confirmation_msg,
+                    parse_mode='Markdown',
+                    reply_markup=get_confirmation_inline_keyboard()
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
 
         # 5. CONFIRMATION/PAYMENT: data='confirm_pay'
@@ -1602,13 +1628,20 @@ def handle_inline_callbacks(call):
                 )
 
                 # Edit the confirmation message to display the payment QR/Link
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text="⏳ Generating payment link and QR code...",
-                    reply_markup=None  # Remove old buttons first
-                )
-
+                # We need to wrap this in a try-except to handle the 400 error cleanly.
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⏳ Generating payment link and QR code...",
+                        reply_markup=None  # Remove old buttons first
+                    )
+                except telebot.apihelper.ApiTelegramException as e:
+                    # Ignore the "message is not modified" error which can happen if the previous edit failed
+                    if "message is not modified" not in str(e):
+                        print(f"⚠️ Edit message failed before QR send: {e}")
+                        pass
+                
                 if payment_qr_path:
                     # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
                     with open(payment_qr_path, 'rb') as photo:
@@ -1700,13 +1733,25 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
         main_message += "📋 *Please select an item to order:*"
 
         if message_id:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=main_message,
-                parse_mode='Markdown',
-                reply_markup=get_menu_inline_keyboard(student_db_id)
-            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=main_message,
+                    parse_mode='Markdown',
+                    reply_markup=get_menu_inline_keyboard(student_db_id)
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                # FIX 400 Error on start_menu_flow
+                if "message is not modified" not in str(e) and "message can't be edited" not in str(e):
+                    raise
+                # Fallback to sending a new message if edit fails for any non-400 reason
+                bot.send_message(
+                    chat_id=chat_id,
+                    text=main_message,
+                    parse_mode='Markdown',
+                    reply_markup=get_menu_inline_keyboard(student_db_id)
+                )
         else:
             bot.send_message(
                 chat_id=chat_id,
@@ -1804,44 +1849,66 @@ def run_polling_service():
     print("    ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
-    # CRITICAL FIX: Clear any active webhook before starting polling
+    # CRITICAL FIX: Delete webhook before starting polling
     try:
+        # This is CRUCIAL to stop any residual webhook calls from conflicting with polling
         if bot.delete_webhook():
             print("✅ Successfully cleared existing Telegram webhook.")
     except Exception as e:
+        # Ignore common errors during initial delete webhook attempt
         print(f"⚠️ Warning: Could not delete webhook on startup: {e}")
 
-    # Perform setup required for polling service
+    # Perform ALL setup required for this dedicated polling service
     print("\n🔧 Initializing Database and Cleanup...")
-    db_manager.create_tables()
+    # NOTE: This initialization MUST run in the polling service to guarantee setup on Render Worker
+    
+    # 1. Aggressive reset and table creation
+    if db_manager.aggressive_db_reset():
+        print("✅ Database file reset successful.")
+        
+    if db_manager.create_tables():
+        print("✅ Database tables created/verified successfully!")
+    else:
+        print("❌ Database initialization failed!")
+        return # Exit if DB fails
+
     db_manager.add_default_menu_items()
     db_manager.archive_and_reset_daily_orders()
     db_manager.cleanup_old_sessions() 
-
     start_cleanup_thread()
     print("=" * 50)
+    
+    print("\nStarting bot polling loop...")
 
+    # The actual polling loop, with error handling for the 409 conflict
     while True:
         try:
             bot.polling(non_stop=True, interval=3)
+        except telebot.apihelper.ApiTelegramException as e:
+            # Re-check the 409 conflict error (should be rare now)
+            if 'terminated by other getUpdates request' in str(e):
+                print("❌ CRITICAL: 409 Conflict. Another instance is running! Waiting to retry...")
+                time.sleep(8)
+            else:
+                print(f"❌ Telegram API Error: {e}. Retrying in 5 seconds...")
+                time.sleep(5)
         except Exception as e:
-            print(f"❌ Polling failed due to fatal error: {e}. Retrying in 5 seconds...")
+            print(f"❌ Fatal Polling Error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
         except KeyboardInterrupt:
             break
 
-# --- FLASK SERVER & BOT STARTUP (FIXED) ---
+# --- FLASK SERVER & BOT STARTUP ---
 
 # CRITICAL FIX: The Flask server function must be separate and simple for Gunicorn
 def run_flask():
-    """Starts the Flask server bound to the required PORT."""
+    """Runs Flask in a thread for Hybrid mode, or is the entry point for Gunicorn."""
     PORT = int(os.environ.get("PORT", 5001))
     print(f"🌐 Starting Flask server on port {PORT}...")
-    # NOTE: In a Gunicorn environment, app.run() is not called.
-    # When running locally (Hybrid mode), this will run in a separate thread.
+    # This function is called by Gunicorn for the Web Service, or in a thread for Hybrid.
     app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
-# CRITICAL FIX: Call setup_flask_routes here so that Gunicorn always loads all routes.
+# Call setup_flask_routes here so that Gunicorn always loads all routes.
 setup_flask_routes()
 
 
@@ -1855,65 +1922,17 @@ if __name__ == '__main__':
         # 1. WEB SERVICE MODE (Gunicorn runs 'gunicorn app:app')
         print("🌐 Running in Web Service Mode (Gunicorn).")
         # No polling, no threads, just let Gunicorn serve the Flask 'app' instance.
-        # This block intentionally does nothing but print a message.
+        # Gunicorn handles Flask startup. Polling logic is never reached.
     
     else:
         # 2. HYBRID/POLLING MODE (python app.py)
-        print("\n🔧 Initializing Telegram Canteen Bot (Hybrid Mode)...")
+        # This is the dedicated polling service's entry point.
+        print("\n🔧 Starting Hybrid Polling Service...")
         
-        # --- AGGRESSIVE DB RESET / INITIAL SETUP (Only needed once per deployment) ---
-        if db_manager.aggressive_db_reset():
-            print("✅ Database file reset successful.")
-        
-        print("🗃️  Setting up database tables and default data...")
-        if not db_manager.create_tables():
-            print("❌ Database initialization failed!")
-            exit(1)
-        db_manager.add_default_menu_items()
-        
-        # --- START FLASK THREAD (for webhooks/QR page) ---
-        # Note: If running on a platform with separate processes for web/worker, 
-        # this thread should be REMOVED from the worker process, and the web 
-        # process should solely run Gunicorn. Since the user asked for a total code fix,
-        # we maintain the thread for hybrid/local testing compatibility.
+        # Start Flask in a separate thread for local/hybrid development
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        time.sleep(1) # Give the server a moment to bind
+        time.sleep(1)
         
-        # --- START POLLING AND CLEANUP ---
-        # We wrap the core polling logic into a new entry point for clarity,
-        # but for the 409 error, the simple fix is to ensure the polling starts here.
-        
-        print("\nRunning daily archive and starting core bot logic...")
-        
-        # The polling service now runs ALL remaining bot logic (cleanup, polling loop)
-        try:
-            # We explicitly run the initialization steps here before polling starts
-            db_manager.archive_and_reset_daily_orders()
-            db_manager.cleanup_old_sessions()
-            start_cleanup_thread() # Start the persistent cleanup thread
-            
-            print("\nStarting bot polling loop...")
-            
-            # The actual polling loop
-            while True:
-                try:
-                    # Clear webhook *before* starting polling
-                    bot.delete_webhook() 
-                    bot.polling(non_stop=True, interval=3)
-                except telebot.apihelper.ApiTelegramException as e:
-                    print(f"❌ Telegram API Error: {e}. Retrying in 5 seconds...")
-                    time.sleep(5)
-                except Exception as e:
-                    print(f"❌ Fatal Polling Error: {e}. Retrying in 5 seconds...")
-                    time.sleep(5)
-                except KeyboardInterrupt:
-                    break
-
-        except KeyboardInterrupt:
-            print("\n🛑 Bot stopped by user.")
-        except Exception as e:
-            print(f"❌ Error during application startup: {e}")
-            traceback.print_exc()
-
-# The Flask application object 'app' must be at the top level for Gunicorn to find it.
+        # Run the dedicated polling function
+        run_polling_service()

@@ -279,15 +279,17 @@ def setup_flask_routes():
 
 # --- RAZORPAY API FUNCTIONS ---
 def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
-    """Creates a Razorpay Payment Link object and returns its details."""
+    """
+    Creates a Razorpay Payment Link object and returns its details.
+    FIXED: Uses a UUID for reference_id to avoid the CANTN_20251006_1 conflict.
+    """
     if not BOT_PUBLIC_URL or not BOT_PUBLIC_URL.startswith('http'):
         print("❌ CRITICAL ERROR: BOT_PUBLIC_URL is missing or invalid.")
         return None, None
 
     try:
-        # Generate a daily-unique reference ID for Razorpay
-        today_date_str = datetime.now().strftime('%Y%m%d')
-        daily_unique_reference_id = f"CANTN_{today_date_str}_{internal_order_id}"
+        # Generate a truly unique ID that is safe to use as Razorpay's reference_id
+        unique_reference_id = str(uuid.uuid4()) 
 
         notes = {
             "internal_order_id": str(internal_order_id),
@@ -303,8 +305,8 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
             "amount": int(amount * 100),  # Amount in paise
             "currency": "INR",
             "accept_partial": False,
-            # CRITICAL FIX: Use the daily-unique reference ID
-            "reference_id": daily_unique_reference_id,
+            # CRITICAL FIX: Use the UUID reference ID
+            "reference_id": unique_reference_id,
             "description": f"Canteen Order #{internal_order_id} - {PAYEE_NAME}",
             "customer": {
                 # Use the collected phone number if available
@@ -334,8 +336,9 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
     except Exception as e:
         print(f"❌ Error generating Razorpay payment link/order: {e}")
         traceback.print_exc()
-        # CRITICAL FIX: Re-raise the specific Razorpay error so the caller can reset the session cleanly.
-        if isinstance(e, razorpay.errors.BadRequestError) and "reference_id" in str(e):
+        # CRITICAL FIX: We no longer need to check for the reference_id conflict here, 
+        # as the UUID should prevent it. We only raise other BadRequestErrors.
+        if isinstance(e, razorpay.errors.BadRequestError):
              raise razorpay.errors.BadRequestError(str(e))
         return None, None
 
@@ -1578,16 +1581,17 @@ def handle_inline_callbacks(call):
             else:
                 # Generate new link only if none exists
                 try:
+                    # The generate_razorpay_payment_link function now uses a UUID, resolving the conflict.
                     razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
                 
-                # CATCH THE RAZORPAY BAD REQUEST (Reference ID conflict)
+                # CATCH THE RAZORPAY BAD REQUEST (for safety, but should no longer be the reference_id conflict)
                 except razorpay.errors.BadRequestError as e:
                     print(f"❌ Razorpay Conflict Error or Bad Request: {e}. Forcing session reset.")
                     db_manager.set_session_state(student_db_id, 'initial', None)
                     # Use bot.send_message for a new, clean reply to avoid the 400 edit error
                     bot.send_message(
                         chat_id=chat_id,
-                        text="❌ Payment link error (Order ID conflict). The session has been reset. Please tap 'Menu 🍽️' to start a *new* order.",
+                        text="❌ Payment link error (API request failed). The session has been reset. Please tap 'Menu 🍽️' to start a *new* order.",
                         reply_markup=get_main_reply_keyboard()
                     )
                     return

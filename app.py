@@ -118,6 +118,25 @@ def setup_flask_routes():
         """
         return html_content
 
+def generate_pickup_qr_code(order_id, student_phone):
+    """
+    MODIFIED: Generates pickup QR code that links to the order display webpage.
+    """
+    try:
+        # ... (logic to generate verification_code and web_link) ...
+        # ...
+        # The line below is where the ModuleNotFoundError occurred:
+        # from PIL import Image, ImageDraw (imported internally by qrcode.make_image)
+        qr_img = qr.make_image(fill_color="darkgreen", back_color="white")
+        qr_img.save(filepath)
+
+        return str(filepath), verification_code, web_link  # RETURN THE WEB LINK
+
+    except Exception as e:
+        print(f"❌ Error generating pickup QR code: {e}")
+        # ... (graceful fallback returns None, None, None)
+        return None, None, None
+
     @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""

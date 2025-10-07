@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import qrcode
 import uuid
-import urllib.parse # ADDED for robust URL construction
+import urllib.parse
 import json
 import threading
 import time
@@ -168,7 +168,7 @@ def setup_flask_routes():
     @app.route('/order_display/<int:order_id>/<string:verification_code>', methods=['GET'])
     def order_display(order_id, verification_code):
         """
-        NEW ENDPOINT: Displays the digital order ticket in a web browser.
+        FIXED ENDPOINT NAME: Displays the digital order ticket in a web browser.
         This page is accessed by scanning the QR code.
         """
         order_details = db_manager.get_order_details(order_id)
@@ -335,11 +335,6 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
 
     except Exception as e:
         # Added extra logging for the reference ID before raising
-        # The UUID fix means we should NOT get the specific "reference_id already exists" error, 
-        # but we handle any other BadRequestError safely.
-        # NOTE: unique_reference_id is NOT available here if the exception occurred before its definition,
-        # but since the exception occurs inside the client.create() call, we assume it's available.
-        # For simplicity and robust logging in this context, we rely on the trace.
         print(f"❌ Error generating Razorpay payment link/order: {e}")
         traceback.print_exc()
         if isinstance(e, razorpay.errors.BadRequestError):
@@ -399,7 +394,7 @@ def generate_pickup_qr_code(order_id, student_phone):
         if not BOT_PUBLIC_URL:
             raise ValueError("BOT_PUBLIC_URL environment variable is not set.")
 
-        # CRITICAL FIX: Use urljoin for robustness and ensure the correct path is used
+        # CRITICAL FIX: Ensure the correct path with the underscore is used
         path = f"order_display/{order_id}/{verification_code}"
         web_link = urllib.parse.urljoin(BOT_PUBLIC_URL.rstrip('/') + '/', path)
 

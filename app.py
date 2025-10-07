@@ -330,14 +330,15 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
         payment_url = rzp_link['short_url']
         razorpay_order_id = rzp_link['id']
 
-        print(f"💰 Razorpay Payment Link created: {razorpay_order_id} (Link: {payment_url})")
+        print(f"💰 Razorpay Payment Link created: {razorpay_order_id} (Ref ID: {unique_reference_id})")
         return razorpay_order_id, payment_url
 
     except Exception as e:
         # Added extra logging for the reference ID before raising
+        # The UUID fix means we should NOT get the specific "reference_id already exists" error, 
+        # but we handle any other BadRequestError safely.
         print(f"❌ Error generating Razorpay payment link/order (Ref ID: {unique_reference_id}): {e}")
         traceback.print_exc()
-        # CRITICAL FIX: We re-raise the BadRequestError to be handled in the caller.
         if isinstance(e, razorpay.errors.BadRequestError):
              raise razorpay.errors.BadRequestError(str(e))
         return None, None
@@ -376,9 +377,9 @@ def generate_payment_qr_code(payment_link, order_id):
         return str(filepath)
 
     except Exception as e:
-        # Added check for missing PIL library (ModuleNotFoundError)
         if "No module named 'PIL'" in str(e):
-            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. Please add 'Pillow' to requirements.txt.")
+            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. Payment QR code generation failed.")
+            print("Action: Add 'Pillow' to requirements.txt and redeploy.")
         print(f"❌ Error generating payment QR code (runtime error): {e}")
         return None
 
@@ -417,11 +418,10 @@ def generate_pickup_qr_code(order_id, student_phone):
 
     except Exception as e:
         if "No module named 'PIL'" in str(e):
-            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. QR code generation failed.")
+            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. Pickup QR code generation failed.")
+            print("Action: Add 'Pillow' to requirements.txt and redeploy.")
         print(f"❌ Error generating pickup QR code: {e}")
         traceback.print_exc()
-        # FIX: The error message you saw in the screenshot is because None is returned here.
-        # This is the correct fallback, but it requires the PIL fix in requirements.txt.
         return None, None, None
 
 

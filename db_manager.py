@@ -221,7 +221,7 @@ def get_session_state(user_id):
         cursor.execute('SELECT session_state FROM users WHERE id = ?', (user_id,))
         state = cursor.fetchone()
         conn.close()
-        return state[0] if state else 'initial'
+        return state[0] if state and state[0] else 'initial'
     except Exception as e:
         logging.error(f"Error getting session state for {user_id}: {e}")
         return 'initial'
@@ -305,7 +305,6 @@ def cleanup_old_sessions(days_old=30):
         cursor = conn.cursor()
 
         # Calculate the cutoff timestamp
-        # FIX: The input days_old is already an integer
         cutoff_date = datetime.now() - timedelta(days=days_old)
         cutoff_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -1021,5 +1020,3 @@ def get_order_statistics():
     except Exception as e:
         logging.error(f"Error getting order statistics: {e}")
         return None
-
-# End of db_manager.py

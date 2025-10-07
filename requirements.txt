@@ -5,3 +5,4 @@ razorpay
 python-telegram-bot
 pytelegrambotapi  # <-- NEW: The explicit package name for 'telebot'
 qrcode
+pillow

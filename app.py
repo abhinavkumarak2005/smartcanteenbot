@@ -647,24 +647,26 @@ def handle_successful_payment(internal_order_id, student_db_id):
     # We check if QR generation failed (due to missing PIL)
     if web_link is None:
         web_link_display = "None (Error during generation)"
-        link_markdown = web_link_display
+        link_markdown = escape_markdown(web_link_display) # Use generic escaping
     else:
         web_link_display = web_link
-        # FINAL FIX: Escape the underscore in the visible part of the link for Telegram to render it correctly
-        escaped_link_text = web_link.replace('_', '\\_') 
-        # Use Markdown V2 link format for clickable text
-        link_markdown = f"[{escaped_link_text}]({web_link})"
+        # FIX: The link text must be escaped to prevent Markdown V2 from misinterpreting characters
+        # We escape the link text, but keep the link target (web_link) unescaped.
+        escaped_link_text = escape_markdown(web_link_display)
+        # Use Markdown V2 link format for clickable text. Use a generic anchor text.
+        link_markdown = f"[Click Here to View Ticket]({web_link_display})"
 
 
+    # The parts below must now contain fully escaped text or explicit Markdown V2 formatting
     pickup_msg = (
-        f"🎉 Payment Confirmed! (Order ID: #{internal_order_id})\n\n"
-        f"Here is your Order QR Code for pickup!\n\n"
-        f"Verification Code: {verification_code}\n"
-        f"Service Type: {service_type.title()}\n\n"
-        f"For Pickup:\n"
-        f"Scan the QR code below.\n"
-        f"(Note: If you see a warning page, please click 'Visit Site'.)\n\n"
-        f"Alternative Link: {link_markdown}"
+        f"🎉 Payment Confirmed\\! \\(Order ID\\: \\#{internal_order_id}\\)\n\n" # Escaped '!' and '('
+        f"Here is your Order QR Code for pickup\\!\n\n"
+        f"Verification Code\\: *{escape_markdown(verification_code)}*\n"
+        f"Service Type\\: {escape_markdown(service_type.title())}\n\n"
+        f"For Pickup\\:\n"
+        f"Scan the QR code below\\.\n"
+        f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n" # Escaped '(', ')', and '!'
+        f"Alternative Link\\: {link_markdown}"
     )
 
     db_manager.set_session_state(student_db_id, 'pickup_ready', internal_order_id)
@@ -672,22 +674,21 @@ def handle_successful_payment(internal_order_id, student_db_id):
 
     main_keyboard = get_main_reply_keyboard()
     if ticket_qr_path:
-        # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
+        # We MUST use MarkdownV2 here, so the caption must be fully escaped.
         with open(ticket_qr_path, 'rb') as photo:
-            bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2',
+            bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2', # Changed to V2
                            reply_markup=main_keyboard)
     else:
-        # Fallback if QR image generation fails (this is the path taken when PIL is missing)
+        # Fallback message uses MarkdownV2
         fallback_msg = (
-            f"🎉 **Payment Confirmed!**\n\n"
-            f"❌ QR Code generation failed. Use the Verification Code and Alternative Link.\n\n"
-            f"🆔 **Order ID:** #{internal_order_id}\n"
-            f"🔢 **Verification Code:** `{verification_code}`\n\n"
+            f"🎉 \\*Payment Confirmed\\!\\* \n\n" # Escaped '*' and '!'
+            f"❌ QR Code generation failed\\. Use the Verification Code and Alternative Link\\.\n\n"
+            f"🆔 \\*Order ID\\*\\: \\#{internal_order_id}\n"
+            f"🔢 \\*Verification Code\\*\\: `{verification_code}`\n\n"
             f"Show this verification code at the counter for pickup\n"
-            f"⏰ **Ready in:** 10-15 minutes\n\n"
-            f"🔗 **Alternative Link:** {link_markdown}"
+            f"⏰ \\*Ready in\\*\\: 10\\-15 minutes\n\n" # Escaped '*' and '-'
+            f"🔗 \\*Alternative Link\\*\\: {link_markdown}"
         )
-        # Using Markdown V2 for fallback message
         bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=main_keyboard)
 
 

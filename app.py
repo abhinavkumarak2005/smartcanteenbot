@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import qrcode
 import uuid
-import urllib.parse
+import urllib.parse # ADDED for robust URL construction
 import json
 import threading
 import time
@@ -337,7 +337,10 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
         # Added extra logging for the reference ID before raising
         # The UUID fix means we should NOT get the specific "reference_id already exists" error, 
         # but we handle any other BadRequestError safely.
-        print(f"❌ Error generating Razorpay payment link/order (Ref ID: {unique_reference_id}): {e}")
+        # NOTE: unique_reference_id is NOT available here if the exception occurred before its definition,
+        # but since the exception occurs inside the client.create() call, we assume it's available.
+        # For simplicity and robust logging in this context, we rely on the trace.
+        print(f"❌ Error generating Razorpay payment link/order: {e}")
         traceback.print_exc()
         if isinstance(e, razorpay.errors.BadRequestError):
              raise razorpay.errors.BadRequestError(str(e))
@@ -392,12 +395,14 @@ def generate_pickup_qr_code(order_id, student_phone):
         # Generate the unique verification code
         verification_code = f"{order_id}{datetime.now().strftime('%M%S')}"
 
-        # Construct the URL pointing to the Flask web page
+        # Construct the base URL for the endpoint
         if not BOT_PUBLIC_URL:
             raise ValueError("BOT_PUBLIC_URL environment variable is not set.")
 
-        # The URL contains the order ID and the security code
-        web_link = f"{BOT_PUBLIC_URL}/order_display/{order_id}/{verification_code}"
+        # CRITICAL FIX: Use urljoin for robustness and ensure the correct path is used
+        path = f"order_display/{order_id}/{verification_code}"
+        web_link = urllib.parse.urljoin(BOT_PUBLIC_URL.rstrip('/') + '/', path)
+
 
         filename = f"pickup_qr_{order_id}_{uuid.uuid4().hex[:8]}.png"
 
@@ -414,7 +419,7 @@ def generate_pickup_qr_code(order_id, student_phone):
         qr_img = qr.make_image(fill_color="darkgreen", back_color="white")
         qr_img.save(filepath)
 
-        return str(filepath), verification_code, web_link  # RETURN THE WEB LINK
+        return str(filepath), verification_code, web_link  # RETURN THE CORRECTED WEB LINK
 
     except Exception as e:
         if "No module named 'PIL'" in str(e):
@@ -644,7 +649,12 @@ def handle_successful_payment(internal_order_id, student_db_id):
     service_type = order_details.get('service_type', 'N/A')
 
     # --- CHANGED: Updated message for QR code link ---
-    # NOTE: We are using parse_mode=None (Plain Text) for the caption to avoid crashing.
+    # We check if QR generation failed (due to missing PIL)
+    if web_link is None:
+        web_link_display = "None (Error during generation)"
+    else:
+        web_link_display = web_link
+
     pickup_msg = (
         f"🎉 Payment Confirmed! (Order ID: #{internal_order_id})\n\n"
         f"Here is your Order QR Code for pickup!\n\n"
@@ -653,7 +663,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
         f"For Pickup:\n"
         f"Scan the QR code below.\n"
         f"(Note: If you see a warning page, please click 'Visit Site'.)\n\n"
-        f"Alternative Link: {web_link}"
+        f"Alternative Link: {web_link_display}"
     )
 
     db_manager.set_session_state(student_db_id, 'pickup_ready', internal_order_id)
@@ -669,12 +679,12 @@ def handle_successful_payment(internal_order_id, student_db_id):
         # Fallback if QR image generation fails (this is the path taken when PIL is missing)
         fallback_msg = (
             f"🎉 **Payment Confirmed!**\n\n"
-            f"❌ QR Code generation failed. Use the link below:\n\n"
+            f"❌ QR Code generation failed. Use the Verification Code and Alternative Link.\n\n"
             f"🆔 **Order ID:** #{internal_order_id}\n"
             f"🔢 **Verification Code:** `{verification_code}`\n\n"
             f"Show this verification code at the counter for pickup\n"
             f"⏰ **Ready in:** 10-15 minutes\n\n"
-            f"🔗 **Alternative Link:** {web_link}"
+            f"🔗 **Alternative Link:** {web_link_display}"
         )
         # Using Markdown for fallback message
         bot.send_message(student_db_id, fallback_msg, parse_mode='Markdown', reply_markup=main_keyboard)

@@ -165,6 +165,7 @@ def setup_flask_routes():
         # 4. Return 200 OK to Razorpay immediately
         return jsonify(success=True), 200
 
+    # REVERTED TO USE UNDERSCORE AND MAKE URLJOIN CONSISTENT
     @app.route('/order_display/<int:order_id>/<string:verification_code>', methods=['GET'])
     def order_display(order_id, verification_code):
         """
@@ -643,12 +644,17 @@ def handle_successful_payment(internal_order_id, student_db_id):
 
     service_type = order_details.get('service_type', 'N/A')
 
-    # --- CHANGED: Updated message for QR code link ---
     # We check if QR generation failed (due to missing PIL)
     if web_link is None:
         web_link_display = "None (Error during generation)"
+        link_markdown = web_link_display
     else:
         web_link_display = web_link
+        # FINAL FIX: Escape the underscore in the visible part of the link for Telegram to render it correctly
+        escaped_link_text = web_link.replace('_', '\\_') 
+        # Use Markdown V2 link format for clickable text
+        link_markdown = f"[{escaped_link_text}]({web_link})"
+
 
     pickup_msg = (
         f"🎉 Payment Confirmed! (Order ID: #{internal_order_id})\n\n"
@@ -658,7 +664,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
         f"For Pickup:\n"
         f"Scan the QR code below.\n"
         f"(Note: If you see a warning page, please click 'Visit Site'.)\n\n"
-        f"Alternative Link: {web_link_display}"
+        f"Alternative Link: {link_markdown}"
     )
 
     db_manager.set_session_state(student_db_id, 'pickup_ready', internal_order_id)
@@ -668,7 +674,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
     if ticket_qr_path:
         # FIX: Sending the photo with PLAIN TEXT parse_mode=None to avoid Markdown crash (Error 400 fix)
         with open(ticket_qr_path, 'rb') as photo:
-            bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='Markdown',
+            bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2',
                            reply_markup=main_keyboard)
     else:
         # Fallback if QR image generation fails (this is the path taken when PIL is missing)
@@ -679,10 +685,10 @@ def handle_successful_payment(internal_order_id, student_db_id):
             f"🔢 **Verification Code:** `{verification_code}`\n\n"
             f"Show this verification code at the counter for pickup\n"
             f"⏰ **Ready in:** 10-15 minutes\n\n"
-            f"🔗 **Alternative Link:** {web_link_display}"
+            f"🔗 **Alternative Link:** {link_markdown}"
         )
-        # Using Markdown for fallback message
-        bot.send_message(student_db_id, fallback_msg, parse_mode='Markdown', reply_markup=main_keyboard)
+        # Using Markdown V2 for fallback message
+        bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=main_keyboard)
 
 
 def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, quantity):

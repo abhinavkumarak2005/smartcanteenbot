@@ -118,25 +118,6 @@ def setup_flask_routes():
         """
         return html_content
 
-def generate_pickup_qr_code(order_id, student_phone):
-    """
-    MODIFIED: Generates pickup QR code that links to the order display webpage.
-    """
-    try:
-        # ... (logic to generate verification_code and web_link) ...
-        # ...
-        # The line below is where the ModuleNotFoundError occurred:
-        # from PIL import Image, ImageDraw (imported internally by qrcode.make_image)
-        qr_img = qr.make_image(fill_color="darkgreen", back_color="white")
-        qr_img.save(filepath)
-
-        return str(filepath), verification_code, web_link  # RETURN THE WEB LINK
-
-    except Exception as e:
-        print(f"❌ Error generating pickup QR code: {e}")
-        # ... (graceful fallback returns None, None, None)
-        return None, None, None
-
     @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
@@ -388,12 +369,16 @@ def generate_payment_qr_code(payment_link, order_id):
         qr.add_data(payment_link)
         qr.make(fit=True)
 
+        # The line below requires the Pillow (PIL) library
         qr_img = qr.make_image(fill_color="darkblue", back_color="white")
         qr_img.save(filepath)
 
         return str(filepath)
 
     except Exception as e:
+        # Added check for missing PIL library (ModuleNotFoundError)
+        if "No module named 'PIL'" in str(e):
+            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. Please add 'Pillow' to requirements.txt.")
         print(f"❌ Error generating payment QR code (runtime error): {e}")
         return None
 
@@ -423,14 +408,20 @@ def generate_pickup_qr_code(order_id, student_phone):
         qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=4)
         qr.add_data(web_link)
         qr.make(fit=True)
+        
+        # The line below requires the Pillow (PIL) library
         qr_img = qr.make_image(fill_color="darkgreen", back_color="white")
         qr_img.save(filepath)
 
         return str(filepath), verification_code, web_link  # RETURN THE WEB LINK
 
     except Exception as e:
+        if "No module named 'PIL'" in str(e):
+            print("❌ CRITICAL ERROR: PIL/Pillow library is missing. QR code generation failed.")
         print(f"❌ Error generating pickup QR code: {e}")
         traceback.print_exc()
+        # FIX: The error message you saw in the screenshot is because None is returned here.
+        # This is the correct fallback, but it requires the PIL fix in requirements.txt.
         return None, None, None
 
 
@@ -675,10 +666,10 @@ def handle_successful_payment(internal_order_id, student_db_id):
             bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='Markdown',
                            reply_markup=main_keyboard)
     else:
-        # Fallback if QR image generation fails
+        # Fallback if QR image generation fails (this is the path taken when PIL is missing)
         fallback_msg = (
             f"🎉 **Payment Confirmed!**\n\n"
-            f"QR Code generation failed. Use the link below:\n\n"
+            f"❌ QR Code generation failed. Use the link below:\n\n"
             f"🆔 **Order ID:** #{internal_order_id}\n"
             f"🔢 **Verification Code:** `{verification_code}`\n\n"
             f"Show this verification code at the counter for pickup\n"
@@ -1605,7 +1596,7 @@ def handle_inline_callbacks(call):
                 
                 # CATCH THE RAZORPAY BAD REQUEST (for safety, but should no longer be the reference_id conflict)
                 except razorpay.errors.BadRequestError as e:
-                    print(f"❌ Razorpay Conflict Error or Bad Request: {e}. Forcing session reset.")
+                    print(f"❌ Razorpay API Error: {e}. Forcing session reset.")
                     db_manager.set_session_state(student_db_id, 'initial', None)
                     # Use bot.send_message for a new, clean reply to avoid the 400 edit error
                     bot.send_message(
@@ -1667,6 +1658,7 @@ def handle_inline_callbacks(call):
                         bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
                                        reply_markup=payment_keyboard)
                 else:
+                    # This path is taken when PIL is missing or QR generation fails.
                     bot.send_message(chat_id, payment_msg, parse_mode='Markdown', reply_markup=payment_keyboard)
 
                 db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)

@@ -618,9 +618,9 @@ def get_menu_text_with_sections():
         
         if items_by_section[section]:
             for item in items_by_section[section]:
-                 menu_text += f"   - **ID {item['id']}:** {item['name'].title()} - *₹{item['price']:.2f}*\n"
+                 menu_text += f"    - **ID {item['id']}:** {item['name'].title()} - *₹{item['price']:.2f}*\n"
         else:
-            menu_text += "   - *No items available for this section.*\n"
+            menu_text += "    - *No items available for this section.*\n"
         menu_text += "\n"
         
     menu_text += "*Select an item below to begin your order.*"
@@ -758,7 +758,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
         # We MUST use MarkdownV2 here, so the caption must be fully escaped.
         with open(ticket_qr_path, 'rb') as photo:
             bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2', # Changed to V2
-                            reply_markup=main_keyboard)
+                             reply_markup=main_keyboard)
     else:
         # Fallback message uses MarkdownV2
         fallback_msg = (
@@ -977,10 +977,10 @@ def handle_admin_text_commands(msg, chat_id):
 
                 orders_text += (
                     f"{status_emoji} **Order #{order['id']}**\n"
-                    f"  - Status: {order['status'].title()}\n"
-                    f"  - Total: ₹{order['total_amount']:.2f}\n"
-                    f"  - Items: {item_summary}\n"
-                    f"  - Time: {time_part}\n\n"
+                    f"  - Status: {order['status'].title()}\n"
+                    f"  - Total: ₹{order['total_amount']:.2f}\n"
+                    f"  - Items: {item_summary}\n"
+                    f"  - Time: {time_part}\n\n"
                 )
 
         send_admin_message_wrapper(orders_text)
@@ -994,548 +994,549 @@ def handle_admin_text_commands(msg, chat_id):
 
 def handle_admin_callbacks(data, chat_id, message_id):
     """Processes inline buttons clicked from the Admin Dashboard."""
+    # CRITICAL FIX: Add a top-level try block to match the final except below
+    try: 
+        command = data.split('_')[1]
+        command_type = data.split(':')[0]
 
-    command = data.split('_')[1]
-    command_type = data.split(':')[0]
-
-    def edit_message(text, reply_markup=None, parse_mode='Markdown'):
-        """
-        Attempts to edit the inline message.
-        """
-        
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" in str(e) or "message can't be edited" in str(e):
-                return
-
-            # Fallback: Send the message as a new one
-            print(f"⚠️ Edit failed for {command}. Sending new message. Error: {e}")
-            try:
-                # Send a new message with the content and the correct inline buttons
-                bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-
-                # Send the dashboard keyboard separately for navigation
-                bot.send_message(chat_id, "Please use the dashboard buttons below.",
-                                 reply_markup=get_admin_reply_keyboard())
-            except Exception as e2:
-                bot.send_message(chat_id, f"⚠️ Error. Please use text command directly.\n\n{text}", parse_mode=None)
-
-    # Helper for going back to the main admin dashboard (used below)
-    back_to_dashboard = InlineKeyboardMarkup().row(
-        InlineKeyboardButton("↩️ Back to Dashboard", callback_data="admin_dashboard")
-    )
-
-    # Helper to go back to Orders dashboard (used below)
-    back_to_orders_dashboard = InlineKeyboardMarkup().row(
-        InlineKeyboardButton("↩️ Back to Orders", callback_data="admin_orders_dashboard")
-    )
-
-
-    if command == 'dashboard':
-        edit_message(
-            text="⚙️ **Admin Dashboard**\n\nSelect an action:",
-            reply_markup=get_admin_dashboard_keyboard()
-        )
-        return
-
-    # NEW: Handle Orders dashboard navigation
-    elif data == 'admin_orders_dashboard':
-        edit_message(
-            text="📦 **Order Management**\n\nSelect an order view:",
-            reply_markup=get_orders_dashboard_keyboard()
-        )
-        return
-
-    elif data == 'admin_orders_today':
-        # 1. Send the data in a new message using the existing text command handler
-        handle_admin_text_commands('/today', chat_id) 
-        
-        # 2. Edit the inline message to a clean status message with navigation
-        edit_message("✅ **Live Orders** sent above. Use the button below to go back.", 
-                     reply_markup=back_to_orders_dashboard)
-        return
-
-    elif data == 'admin_orders_archive':
-        # 1. Send the data (archive list) in a new message
-        view_archives_command_handler(chat_id) 
-        
-        # 2. Edit the inline message to a clean status message with navigation
-        edit_message("✅ **Archive List** sent above. Select a date to view history.", 
-                     reply_markup=back_to_orders_dashboard)
-        return
-
-
-    elif command == 'menu':
-        menu = db_manager.get_menu()
-        if menu:
-            # MODIFIED: Use the new section-based display for the admin view
-            menu_text = get_menu_text_with_sections()
+        def edit_message(text, reply_markup=None, parse_mode='Markdown'):
+            """
+            Attempts to edit the inline message.
+            """
             
-            # Also add a simple list of ID/Name for easy updating
-            simple_list = "\n\n--- Item IDs ---\n"
-            simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
-                 
-            edit_message(menu_text + simple_list, back_to_dashboard)
-        else:
-            edit_message("📋 The menu is currently empty.", back_to_dashboard)
-        return
-
-    elif command == 'stats':
-        stats = db_manager.get_order_statistics()
-        if stats:
-            # CRITICAL FIX: Using PLAIN TEXT to guarantee no Markdown parsing errors
-            stats_text = (
-                f"📈 Canteen Statistics\n\n"
-                f"Total Orders: {stats['total_orders']}\n"
-                f"Total Revenue: ₹{stats['total_revenue']:.2f}\n"
-                f"Today's Orders: {stats['today_orders']}\n"
-                f"Orders by Status:\n"
-            )
-            for status, count in stats['status_counts'].items():
-                stats_text += f"- {status.replace('_', ' ').title()}: {count}\n"
-
-            edit_message(stats_text, back_to_dashboard, parse_mode=None)  # Use PLAIN TEXT
-        else:
-            edit_message("📈 Unable to retrieve statistics.", back_to_dashboard)
-        return
-
-    # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
-    elif command == 'help':
-        # MODIFIED: Removed order viewing instructions
-        help_text = (
-            f"❓ **Admin Instructions & Commands**\n\n"
-            f"All management functions are performed using **text commands**.\n"
-            f"-----------------------------------------\n"
-            
-            f"📋 **Menu Management Commands**:\n"
-            f"The menu is divided into sections: {', '.join([s.title() for s in MENU_SECTIONS.keys()])}.\n\n"
-
-            f"**1. Add/Update Item by Name:** (Uses requested section syntax)\n"
-            f"• **Syntax**: `add menu <section> <Item Name> <Price>`\n"
-            f"• **Example**: `add menu breakfast Dosa 45`\n\n"
-
-            f"**2. Update Price by ID:** (Fallback)\n"
-            f"• **Syntax**: `update <Item ID> <New Price>`\n"
-            f"• **Example**: `update 5 15.50`\n\n"
-
-            f"**3. Delete/Remove Item:**\n"
-            f"• **Syntax**: `delete <Item ID>`\n"
-            f"• **Example**: `delete 3`\n\n"
-
-            f"*Tip*: Use 'View Menu' to find the Item ID first."
-        )
-        edit_message(help_text, back_to_dashboard)
-        return
-
-
-    # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
-    elif command_type == 'archive_view_file':
-        filename = data.split(':')[1]
-        archived_orders = db_manager.get_archived_orders_by_filename(filename)
-
-        if not archived_orders:
-            archive_text = f"❌ **Archive Error**\n\nFile not found or corrupted: `{filename}`"
-            edit_message(archive_text, back_to_orders_dashboard) 
-            return
-
-        date_part = filename.replace('orders_archived_before_', '').replace('.json', '')
-        try:
-            # FIX: Calculate the date the data was created (one day before cutoff date)
-            cutoff_date = datetime.strptime(date_part, '%Y-%m-%d')
-            data_date = cutoff_date - timedelta(days=1)
-            display_date = data_date.strftime('%d %b %Y')
-        except ValueError:
-            display_date = "N/A"
-
-        archive_text = f"📄 **Archived Orders (Data up to {display_date})** ({len(archived_orders)} total)\n\n"
-
-        for order in archived_orders:
-            status_emoji = {
-                'pending': '🟡', 'payment_pending': '🟠', 'paid': '🟢',
-                'cancelled': '🔴', 'expired': '⚫', 'delivered': '🔵'
-            }.get(order.get('status', 'N/A'), '⚪')
-
-            items_data = order.get('items', [])
-            item_summary = ", ".join([f"{item.get('name', 'Item')} x{item.get('qty', 1)}" for item in items_data])
-
-            order_id = order.get('id', 'N/A')
-            status = order.get('status', 'N/A').title()
-            total = order.get('total_amount', 0.0)
-
-            archive_text += (
-                f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
-                f"  - Items: {item_summary}\n"
-            )
-
-        edit_message(archive_text, back_to_orders_dashboard) 
-        return
-
-    # --- NEW DELIVERY CALLBACK (Unchanged) ---
-    if data.startswith('delivered:'):
-        order_id = int(data.split(':')[1])
-
-        # 1. Update database status
-        db_manager.update_order_status(order_id, 'delivered')
-
-        # 2. Rebuild the message content to show delivered status
-        order_details = db_manager.get_order_details(order_id)
-
-        if order_details:
-            items_list = db_manager.parse_order_items(order_details['items'])
-            food_summary = "\n".join([
-                f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
-                for item in items_list
-            ])
-
-            # Use the student_phone value directly
-            student_identifier = order_details['student_phone']
-
-            # Use standard Markdown for the final, delivered message for simpler display
-            updated_text = (
-                f"🚨 **ORDER CONFIRMED & PAID!** 🚨\n\n"
-                f"🆔 **Order ID:** #{order_id}\n"
-                f"🔢 **Verification Code:** `{order_details.get('pickup_code', 'N/A')}`\n"
-                f"💰 **Total Amount:** ₹{order_details['total_amount']:.2f}\n"
-                f"📞 **Student Phone/ID:** `{student_identifier}`\n"
-                f"🪑 **Service Type:** *{order_details.get('service_type', 'N/A').title()}*\n\n"
-                f"🍽️ **Ordered Items:**\n{food_summary}\n\n"
-                f"**🔵 STATUS: DELIVERED** (Marked by Admin)"
-            )
-        else:
-            updated_text = f"✅ Order #{order_id} marked as DELIVERED in the database. (Original message details lost upon edit)"
-
-        try:
-            # Edit the message to show the final delivered status and remove the button
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=updated_text,
-                parse_mode='Markdown',  # Use Markdown for the final display
-                reply_markup=None  # Remove the button
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            print(f"⚠️ Failed to edit message for delivery confirmation: {e}")
-            # Fallback: send a new message
-            bot.send_message(chat_id, f"✅ Order #{order_id} marked as DELIVERED.")
-
-        return
-
-    # --- UNIVERSAL CALLBACKS (Unchanged) ---
-    if data == 'menu_start':
-        start_menu_flow(student_db_id, chat_id, message_id)
-        return
-
-    elif data == 'cancel_order':
-        current_order_id = db_manager.get_session_order_id(student_db_id)
-        if current_order_id:
-            db_manager.update_order_status(current_order_id, 'cancelled')
-        db_manager.set_session_state(student_db_id, 'initial', None)
-
-        reply_markup = get_admin_reply_keyboard() if chat_id in ADMIN_CHAT_IDS else get_main_reply_keyboard()
-
-        # FIX 400 ERROR: Use try-except to handle the "message is not modified" error
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text="❌ Order cancelled. Tap 'Menu 🍽️' below to start a new order.",
-                reply_markup=None  # Remove inline buttons
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        
-        bot.send_message(chat_id, "Menu options are available below.", reply_markup=get_main_reply_keyboard())
-        return
-
-    elif data.startswith('copy_razorpay_'):
-        order_id = data.split('_')[-1]
-        order_details = db_manager.get_order_details(int(order_id))
-        if order_details and order_details.get('payment_link'):
-            copy_msg = (
-                f"📋 *Razorpay Payment Link for Order #{order_id}:*\n\n"
-                f"`{order_details['payment_link']}`\n\n"
-                f"💰 *Amount:* ₹{order_details['total_amount']:.2f}"
-            )
-            bot.send_message(chat_id, copy_msg, parse_mode='Markdown')
-        return
-
-    # --- ORDERING FLOW CALLBACKS ---
-    current_order_id = db_manager.get_session_order_id(student_db_id)
-
-    # 1. ITEM SELECTION: data='item:<item_id>'
-    if data.startswith('item:'):
-        item_id = int(data.split(':')[1])
-        item = db_manager.get_menu_item(item_id)
-
-        if not item or current_order_id is None:
-            start_menu_flow(student_db_id, chat_id, message_id,
-                             error_msg="⚠️ Error processing item/order. Restarting.")
-            return
-
-        # Edit message to show quantity buttons
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=f"📦 You selected *{item['name'].title()}* (₹{item['price']:.2f}).\n\n"
-                      f"Please select the **quantity** required for this item:",
-                parse_mode='Markdown',
-                reply_markup=get_quantity_inline_keyboard(item_id)
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        return
-
-    # 2. QUANTITY SELECTION (BUTTON): data='qty:<item_id>:<quantity>'
-    elif data.startswith('qty:'):
-        _, item_id_str, quantity_str = data.split(':')
-        item_id = int(item_id_str)
-        quantity = int(quantity_str)
-
-        # This is an inline callback, so message_id is the bot's message ID (EDITABLE)
-        add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, quantity)
-        return
-
-    # 2. QUANTITY SELECTION (TYPE INPUT TRIGGER): data='type_qty:<item_id>'
-    elif data.startswith('type_qty:'):
-        item_id = int(data.split(':')[1])
-        item = db_manager.get_menu_item(item_id)
-
-        # CRITICAL: Change state to awaiting_typed_quantity
-        db_manager.set_session_state(student_db_id, f'awaiting_typed_quantity_{item_id}', current_order_id)
-
-        # Edit the message to show the prompt for typing
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=f"✍️ Please **type the quantity** you require for *{item['name'].title()}* (e.g., `8`).",
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("↩️ Back to Menu", callback_data="menu_start")]
-                ])
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        return
-
-
-    # 3. ADD MORE / CHECKOUT SELECTION: data='add_more' or 'checkout'
-    elif data == 'add_more':
-        # Go back to menu selection
-        start_menu_flow(student_db_id, chat_id, message_id)
-        return
-
-    elif data == 'checkout':
-        # Proceed to service type selection
-        current_order_id = db_manager.get_session_order_id(student_db_id)
-        if not current_order_id or not db_manager.get_order_details(current_order_id):
-             # Fail gracefully if order is somehow lost
-            start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order details lost. Restarting.")
-            return
-
-        db_manager.set_session_state(student_db_id, 'awaiting_service_type', current_order_id)
-        
-        # Show checkout message
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text="🍴 **Checkout:** How would you like your order?",
-                parse_mode='Markdown',
-                reply_markup=get_service_type_inline_keyboard()
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        return
-
-    # 4. SERVICE TYPE SELECTION: data='service:<type>'
-    elif data.startswith('service:'):
-        service_type = data.split(':')[1]
-        current_order_id = db_manager.get_session_order_id(student_db_id)
-
-        # CRITICAL SAFETY CHECK
-        if not current_order_id or not db_manager.get_order_details(current_order_id):
-            start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order error. Restarting.")
-            return
-        
-        # --- Continue processing ---
-        db_manager.update_order_service_type(current_order_id, service_type)
-        order = db_manager.get_order_details(current_order_id)
-
-        # CRITICAL CHECK: Ask for phone number here if needed
-        if not db_manager.get_user_phone(student_db_id):
-            # Save current state and order ID
-            db_manager.set_session_state(student_db_id, 'awaiting_phone_number', current_order_id)
-
-            # Send prompt for contact info
-            prompt_for_phone_number(student_db_id, chat_id)
-            # Edit the previous bot message to remove the inline buttons
             try:
                 bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text="⌛️ Waiting for contact number...",
-                    reply_markup=None
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" in str(e) or "message can't be edited" in str(e):
+                    return
+
+                # Fallback: Send the message as a new one
+                print(f"⚠️ Edit failed for {command}. Sending new message. Error: {e}")
+                try:
+                    # Send a new message with the content and the correct inline buttons
+                    bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+
+                    # Send the dashboard keyboard separately for navigation
+                    bot.send_message(chat_id, "Please use the dashboard buttons below.",
+                                     reply_markup=get_admin_reply_keyboard())
+                except Exception as e2:
+                    bot.send_message(chat_id, f"⚠️ Error. Please use text command directly.\n\n{text}", parse_mode=None)
+
+        # Helper for going back to the main admin dashboard (used below)
+        back_to_dashboard = InlineKeyboardMarkup().row(
+            InlineKeyboardButton("↩️ Back to Dashboard", callback_data="admin_dashboard")
+        )
+
+        # Helper to go back to Orders dashboard (used below)
+        back_to_orders_dashboard = InlineKeyboardMarkup().row(
+            InlineKeyboardButton("↩️ Back to Orders", callback_data="admin_orders_dashboard")
+        )
+
+
+        if command == 'dashboard':
+            edit_message(
+                text="⚙️ **Admin Dashboard**\n\nSelect an action:",
+                reply_markup=get_admin_dashboard_keyboard()
+            )
+            return
+
+        # NEW: Handle Orders dashboard navigation
+        elif data == 'admin_orders_dashboard':
+            edit_message(
+                text="📦 **Order Management**\n\nSelect an order view:",
+                reply_markup=get_orders_dashboard_keyboard()
+            )
+            return
+
+        elif data == 'admin_orders_today':
+            # 1. Send the data in a new message using the existing text command handler
+            handle_admin_text_commands('/today', chat_id)  
+            
+            # 2. Edit the inline message to a clean status message with navigation
+            edit_message("✅ **Live Orders** sent above. Use the button below to go back.", 
+                         reply_markup=back_to_orders_dashboard)
+            return
+
+        elif data == 'admin_orders_archive':
+            # 1. Send the data (archive list) in a new message
+            view_archives_command_handler(chat_id)  
+            
+            # 2. Edit the inline message to a clean status message with navigation
+            edit_message("✅ **Archive List** sent above. Select a date to view history.", 
+                         reply_markup=back_to_orders_dashboard)
+            return
+
+
+        elif command == 'menu':
+            menu = db_manager.get_menu()
+            if menu:
+                # MODIFIED: Use the new section-based display for the admin view
+                menu_text = get_menu_text_with_sections()
+                
+                # Also add a simple list of ID/Name for easy updating
+                simple_list = "\n\n--- Item IDs ---\n"
+                simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+                
+                edit_message(menu_text + simple_list, back_to_dashboard)
+            else:
+                edit_message("📋 The menu is currently empty.", back_to_dashboard)
+            return
+
+        elif command == 'stats':
+            stats = db_manager.get_order_statistics()
+            if stats:
+                # CRITICAL FIX: Using PLAIN TEXT to guarantee no Markdown parsing errors
+                stats_text = (
+                    f"📈 Canteen Statistics\n\n"
+                    f"Total Orders: {stats['total_orders']}\n"
+                    f"Total Revenue: ₹{stats['total_revenue']:.2f}\n"
+                    f"Today's Orders: {stats['today_orders']}\n"
+                    f"Orders by Status:\n"
+                )
+                for status, count in stats['status_counts'].items():
+                    stats_text += f"- {status.replace('_', ' ').title()}: {count}\n"
+
+                edit_message(stats_text, back_to_dashboard, parse_mode=None)  # Use PLAIN TEXT
+            else:
+                edit_message("📈 Unable to retrieve statistics.", back_to_dashboard)
+            return
+
+        # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
+        elif command == 'help':
+            # MODIFIED: Removed order viewing instructions
+            help_text = (
+                f"❓ **Admin Instructions & Commands**\n\n"
+                f"All management functions are performed using **text commands**.\n"
+                f"-----------------------------------------\n"
+                
+                f"📋 **Menu Management Commands**:\n"
+                f"The menu is divided into sections: {', '.join([s.title() for s in MENU_SECTIONS.keys()])}.\n\n"
+
+                f"**1. Add/Update Item by Name:** (Uses requested section syntax)\n"
+                f"• **Syntax**: `add menu <section> <Item Name> <Price>`\n"
+                f"• **Example**: `add menu breakfast Dosa 45`\n\n"
+
+                f"**2. Update Price by ID:** (Fallback)\n"
+                f"• **Syntax**: `update <Item ID> <New Price>`\n"
+                f"• **Example**: `update 5 15.50`\n\n"
+
+                f"**3. Delete/Remove Item:**\n"
+                f"• **Syntax**: `delete <Item ID>`\n"
+                f"• **Example**: `delete 3`\n\n"
+
+                f"*Tip*: Use 'View Menu' to find the Item ID first."
+            )
+            edit_message(help_text, back_to_dashboard)
+            return
+
+
+        # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
+        elif command_type == 'archive_view_file':
+            filename = data.split(':')[1]
+            archived_orders = db_manager.get_archived_orders_by_filename(filename)
+
+            if not archived_orders:
+                archive_text = f"❌ **Archive Error**\n\nFile not found or corrupted: `{filename}`"
+                edit_message(archive_text, back_to_orders_dashboard)  
+                return
+
+            date_part = filename.replace('orders_archived_before_', '').replace('.json', '')
+            try:
+                # FIX: Calculate the date the data was created (one day before cutoff date)
+                cutoff_date = datetime.strptime(date_part, '%Y-%m-%d')
+                data_date = cutoff_date - timedelta(days=1)
+                display_date = data_date.strftime('%d %b %Y')
+            except ValueError:
+                display_date = "N/A"
+
+            archive_text = f"📄 **Archived Orders (Data up to {display_date})** ({len(archived_orders)} total)\n\n"
+
+            for order in archived_orders:
+                status_emoji = {
+                    'pending': '🟡', 'payment_pending': '🟠', 'paid': '🟢',
+                    'cancelled': '🔴', 'expired': '⚫', 'delivered': '🔵'
+                }.get(order.get('status', 'N/A'), '⚪')
+
+                items_data = order.get('items', [])
+                item_summary = ", ".join([f"{item.get('name', 'Item')} x{item.get('qty', 1)}" for item in items_data])
+
+                order_id = order.get('id', 'N/A')
+                status = order.get('status', 'N/A').title()
+                total = order.get('total_amount', 0.0)
+
+                archive_text += (
+                    f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
+                    f"  - Items: {item_summary}\n"
+                )
+
+            edit_message(archive_text, back_to_orders_dashboard)  
+            return
+
+        # --- NEW DELIVERY CALLBACK (Unchanged) ---
+        if data.startswith('delivered:'):
+            order_id = int(data.split(':')[1])
+
+            # 1. Update database status
+            db_manager.update_order_status(order_id, 'delivered')
+
+            # 2. Rebuild the message content to show delivered status
+            order_details = db_manager.get_order_details(order_id)
+
+            if order_details:
+                items_list = db_manager.parse_order_items(order_details['items'])
+                food_summary = "\n".join([
+                    f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
+                    for item in items_list
+                ])
+
+                # Use the student_phone value directly
+                student_identifier = order_details['student_phone']
+
+                # Use standard Markdown for the final, delivered message for simpler display
+                updated_text = (
+                    f"🚨 **ORDER CONFIRMED & PAID!** 🚨\n\n"
+                    f"🆔 **Order ID:** #{order_id}\n"
+                    f"🔢 **Verification Code:** `{order_details.get('pickup_code', 'N/A')}`\n"
+                    f"💰 **Total Amount:** ₹{order_details['total_amount']:.2f}\n"
+                    f"📞 **Student Phone/ID:** `{student_identifier}`\n"
+                    f"🪑 **Service Type:** *{order_details.get('service_type', 'N/A').title()}*\n\n"
+                    f"🍽️ **Ordered Items:**\n{food_summary}\n\n"
+                    f"**🔵 STATUS: DELIVERED** (Marked by Admin)"
+                )
+            else:
+                updated_text = f"✅ Order #{order_id} marked as DELIVERED in the database. (Original message details lost upon edit)"
+
+            try:
+                # Edit the message to show the final delivered status and remove the button
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=updated_text,
+                    parse_mode='Markdown',  # Use Markdown for the final display
+                    reply_markup=None  # Remove the button
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                print(f"⚠️ Failed to edit message for delivery confirmation: {e}")
+                # Fallback: send a new message
+                bot.send_message(chat_id, f"✅ Order #{order_id} marked as DELIVERED.")
+
+            return
+
+        # --- UNIVERSAL CALLBACKS (Unchanged) ---
+        if data == 'menu_start':
+            start_menu_flow(student_db_id, chat_id, message_id)
+            return
+
+        elif data == 'cancel_order':
+            current_order_id = db_manager.get_session_order_id(student_db_id)
+            if current_order_id:
+                db_manager.update_order_status(current_order_id, 'cancelled')
+            db_manager.set_session_state(student_db_id, 'initial', None)
+
+            reply_markup = get_admin_reply_keyboard() if chat_id in ADMIN_CHAT_IDS else get_main_reply_keyboard()
+
+            # FIX 400 ERROR: Use try-except to handle the "message is not modified" error
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Order cancelled. Tap 'Menu 🍽️' below to start a new order.",
+                    reply_markup=None  # Remove inline buttons
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
+            
+            bot.send_message(chat_id, "Menu options are available below.", reply_markup=get_main_reply_keyboard())
+            return
+
+        elif data.startswith('copy_razorpay_'):
+            order_id = data.split('_')[-1]
+            order_details = db_manager.get_order_details(int(order_id))
+            if order_details and order_details.get('payment_link'):
+                copy_msg = (
+                    f"📋 *Razorpay Payment Link for Order #{order_id}:*\n\n"
+                    f"`{order_details['payment_link']}`\n\n"
+                    f"💰 *Amount:* ₹{order_details['total_amount']:.2f}"
+                )
+                bot.send_message(chat_id, copy_msg, parse_mode='Markdown')
+            return
+
+        # --- ORDERING FLOW CALLBACKS ---
+        current_order_id = db_manager.get_session_order_id(student_db_id)
+
+        # 1. ITEM SELECTION: data='item:<item_id>'
+        if data.startswith('item:'):
+            item_id = int(data.split(':')[1])
+            item = db_manager.get_menu_item(item_id)
+
+            if not item or current_order_id is None:
+                start_menu_flow(student_db_id, chat_id, message_id,
+                                 error_msg="⚠️ Error processing item/order. Restarting.")
+                return
+
+            # Edit message to show quantity buttons
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"📦 You selected *{item['name'].title()}* (₹{item['price']:.2f}).\n\n"
+                          f"Please select the **quantity** required for this item:",
+                    parse_mode='Markdown',
+                    reply_markup=get_quantity_inline_keyboard(item_id)
                 )
             except telebot.apihelper.ApiTelegramException as e:
                 if "message is not modified" not in str(e):
                     raise
             return
 
-        items_list = db_manager.parse_order_items(order['items'])
-        food_summary = "\n".join([
-                f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
-                for item in items_list
-            ])
+        # 2. QUANTITY SELECTION (BUTTON): data='qty:<item_id>:<quantity>'
+        elif data.startswith('qty:'):
+            _, item_id_str, quantity_str = data.split(':')
+            item_id = int(item_id_str)
+            quantity = int(quantity_str)
 
-        # Use saved phone for confirmation display
-        contact_display = db_manager.get_user_phone(student_db_id)
-
-        confirmation_msg = (
-            f"📝 *Final Order Confirmation (ID: #{current_order_id}):*\n\n"
-            f"📞 **Contact:** `{contact_display}`\n"
-            f"🪑 **Service Type:** {service_type.replace('_', ' ').title()}\n"
-            f"💰 **Total Amount:** ₹{order['total_amount']:.2f}\n\n"
-            f"🍽️ *Items:*\n{food_summary}\n\n"
-            f"Press **'✅ Confirm & Pay'** to proceed to Razorpay."
-        )
-
-        db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=confirmation_msg,
-                parse_mode='Markdown',
-                reply_markup=get_confirmation_inline_keyboard()
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        return
-
-    # 5. CONFIRMATION/PAYMENT: data='confirm_pay'
-    elif data == 'confirm_pay':
-        order = db_manager.get_order_details(current_order_id)
-        if not order:
-            start_menu_flow(student_db_id, chat_id, message_id, error_msg="❌ Order not found. Restarting.")
+            # This is an inline callback, so message_id is the bot's message ID (EDITABLE)
+            add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, quantity)
             return
 
-        # RE-FIX: If for some reason the state was skipped, block payment until number is present
-        if not db_manager.get_user_phone(student_db_id):
-            db_manager.set_session_state(student_db_id, 'awaiting_phone_number', current_order_id)
-            prompt_for_phone_number(student_db_id, chat_id)
-            return
+        # 2. QUANTITY SELECTION (TYPE INPUT TRIGGER): data='type_qty:<item_id>'
+        elif data.startswith('type_qty:'):
+            item_id = int(data.split(':')[1])
+            item = db_manager.get_menu_item(item_id)
 
-        total_amount = order['total_amount']
-        
-        # --- CRITICAL FIX 1: CHECK FOR AND REUSE EXISTING PAYMENT LINK ---
-        razorpay_order_id = order.get('razorpay_order_id')
-        payment_link = order.get('payment_link')
-        
-        if razorpay_order_id and payment_link:
-            # Reuse existing link and skip creation logic
-            print(f"💰 Reusing existing Razorpay Payment Link for Order #{current_order_id}")
-            
-        else:
-            # Generate new link only if none exists
-            try:
-                # The generate_razorpay_payment_link function now uses a UUID, resolving the conflict.
-                razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
-            
-            # CATCH THE RAZORPAY BAD REQUEST (for safety, but should no longer be the reference_id conflict)
-            except razorpay.errors.BadRequestError as e:
-                print(f"❌ Razorpay API Error: {e}. Forcing session reset.")
-                db_manager.set_session_state(student_db_id, 'initial', None)
-                # Use bot.send_message for a new, clean reply to avoid the 400 edit error
-                bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ Payment link error (API request failed). The session has been reset. Please tap 'Menu 🍽️' to start a *new* order.",
-                    reply_markup=get_main_reply_keyboard()
-                )
-                return
-            # CATCH CONNECTION ERROR
-            except requests.exceptions.ConnectionError:
-                print("❌ Network connection failed during Razorpay link generation. Resetting session.")
-                db_manager.set_session_state(student_db_id, 'initial', None)
-                # Use bot.send_message for a new, clean reply
-                bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
-                    reply_markup=get_main_reply_keyboard()
-                )
-                return
-            
-        # --- END CRITICAL FIX 1 ---
+            # CRITICAL: Change state to awaiting_typed_quantity
+            db_manager.set_session_state(student_db_id, f'awaiting_typed_quantity_{item_id}', current_order_id)
 
-        if razorpay_order_id and payment_link:
-            # Only update DB if a *new* link was generated or if details were missing
-            if not order.get('razorpay_order_id'):
-                db_manager.update_razorpay_details(current_order_id, razorpay_order_id, payment_link)
-                
-            db_manager.update_order_status(current_order_id, 'payment_pending')
-
-            payment_keyboard = create_payment_keyboard(payment_link, current_order_id)
-            
-            payment_qr_path = generate_payment_qr_code(payment_link, current_order_id)
-
-
-            payment_msg = (
-                f"✅ *Order Ready for Payment! (ID: #{current_order_id})*\n\n"
-                f"💰 **Total Amount:** ₹{total_amount:.2f}\n\n"
-                f"💳 **Pay Securely with Razorpay:**\n"
-                f"👆 Tap the button or scan the QR code below.\n"
-                f"Status updates automatically after payment."
-            )
-
-            # Edit the confirmation message to display a generating message
+            # Edit the message to show the prompt for typing
             try:
                 bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,
-                    text="⏳ Generating payment link and QR code...",
-                    reply_markup=None  # Remove old buttons first
+                    text=f"✍️ Please **type the quantity** you require for *{item['name'].title()}* (e.g., `8`).",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("↩️ Back to Menu", callback_data="menu_start")]
+                    ])
                 )
             except telebot.apihelper.ApiTelegramException as e:
                 if "message is not modified" not in str(e):
-                    print(f"⚠️ Edit message failed before QR send: {e}")
-                    pass
+                    raise
+            return
+
+
+        # 3. ADD MORE / CHECKOUT SELECTION: data='add_more' or 'checkout'
+        elif data == 'add_more':
+            # Go back to menu selection
+            start_menu_flow(student_db_id, chat_id, message_id)
+            return
+
+        elif data == 'checkout':
+            # Proceed to service type selection
+            current_order_id = db_manager.get_session_order_id(student_db_id)
+            if not current_order_id or not db_manager.get_order_details(current_order_id):
+                 # Fail gracefully if order is somehow lost
+                start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order details lost. Restarting.")
+                return
+
+            db_manager.set_session_state(student_db_id, 'awaiting_service_type', current_order_id)
             
-            # Send the final payment message (new message to ensure delivery)
-            if payment_qr_path:
-                with open(payment_qr_path, 'rb') as photo:
-                    bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
-                                     reply_markup=payment_keyboard)
-            else:
-                # This path is taken when PIL is missing or QR generation fails.
-                bot.send_message(chat_id, payment_msg, parse_mode='Markdown', reply_markup=payment_keyboard)
-
-            db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
+            # Show checkout message
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="🍴 **Checkout:** How would you like your order?",
+                    parse_mode='Markdown',
+                    reply_markup=get_service_type_inline_keyboard()
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
-        else:
-            # This catches Razorpay internal errors or invalid response where no link was generated
-            db_manager.set_session_state(student_db_id, 'initial', None)
-            bot.send_message(
-                chat_id=chat_id,
-                text="❌ Could not generate payment link. Please tap 'Menu 🍽️' to try again.",
-                reply_markup=get_main_reply_keyboard()
+
+        # 4. SERVICE TYPE SELECTION: data='service:<type>'
+        elif data.startswith('service:'):
+            service_type = data.split(':')[1]
+            current_order_id = db_manager.get_session_order_id(student_db_id)
+
+            # CRITICAL SAFETY CHECK
+            if not current_order_id or not db_manager.get_order_details(current_order_id):
+                start_menu_flow(student_db_id, chat_id, message_id, error_msg="⚠️ Order error. Restarting.")
+                return
+            
+            # --- Continue processing ---
+            db_manager.update_order_service_type(current_order_id, service_type)
+            order = db_manager.get_order_details(current_order_id)
+
+            # CRITICAL CHECK: Ask for phone number here if needed
+            if not db_manager.get_user_phone(student_db_id):
+                # Save current state and order ID
+                db_manager.set_session_state(student_db_id, 'awaiting_phone_number', current_order_id)
+
+                # Send prompt for contact info
+                prompt_for_phone_number(student_db_id, chat_id)
+                # Edit the previous bot message to remove the inline buttons
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⌛️ Waiting for contact number...",
+                        reply_markup=None
+                    )
+                except telebot.apihelper.ApiTelegramException as e:
+                    if "message is not modified" not in str(e):
+                        raise
+                return
+
+            items_list = db_manager.parse_order_items(order['items'])
+            food_summary = "\n".join([
+                f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
+                for item in items_list
+            ])
+
+            # Use saved phone for confirmation display
+            contact_display = db_manager.get_user_phone(student_db_id)
+
+            confirmation_msg = (
+                f"📝 *Final Order Confirmation (ID: #{current_order_id}):*\n\n"
+                f"📞 **Contact:** `{contact_display}`\n"
+                f"🪑 **Service Type:** {service_type.replace('_', ' ').title()}\n"
+                f"💰 **Total Amount:** ₹{order['total_amount']:.2f}\n\n"
+                f"🍽️ *Items:*\n{food_summary}\n\n"
+                f"Press **'✅ Confirm & Pay'** to proceed to Razorpay."
             )
+
+            db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=confirmation_msg,
+                    parse_mode='Markdown',
+                    reply_markup=get_confirmation_inline_keyboard()
+                )
+            except telebot.apihelper.ApiTelegramException as e:
+                if "message is not modified" not in str(e):
+                    raise
             return
 
+        # 5. CONFIRMATION/PAYMENT: data='confirm_pay'
+        elif data == 'confirm_pay':
+            order = db_manager.get_order_details(current_order_id)
+            if not order:
+                start_menu_flow(student_db_id, chat_id, message_id, error_msg="❌ Order not found. Restarting.")
+                return
 
-    except Exception as e:
+            # RE-FIX: If for some reason the state was skipped, block payment until number is present
+            if not db_manager.get_user_phone(student_db_id):
+                db_manager.set_session_state(student_db_id, 'awaiting_phone_number', current_order_id)
+                prompt_for_phone_number(student_db_id, chat_id)
+                return
+
+            total_amount = order['total_amount']
+            
+            # --- CRITICAL FIX 1: CHECK FOR AND REUSE EXISTING PAYMENT LINK ---
+            razorpay_order_id = order.get('razorpay_order_id')
+            payment_link = order.get('payment_link')
+            
+            if razorpay_order_id and payment_link:
+                # Reuse existing link and skip creation logic
+                print(f"💰 Reusing existing Razorpay Payment Link for Order #{current_order_id}")
+                
+            else:
+                # Generate new link only if none exists
+                try:
+                    # The generate_razorpay_payment_link function now uses a UUID, resolving the conflict.
+                    razorpay_order_id, payment_link = generate_razorpay_payment_link(current_order_id, total_amount, student_db_id)
+                
+                # CATCH THE RAZORPAY BAD REQUEST (for safety, but should no longer be the reference_id conflict)
+                except razorpay.errors.BadRequestError as e:
+                    print(f"❌ Razorpay API Error: {e}. Forcing session reset.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    # Use bot.send_message for a new, clean reply to avoid the 400 edit error
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Payment link error (API request failed). The session has been reset. Please tap 'Menu 🍽️' to start a *new* order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
+                # CATCH CONNECTION ERROR
+                except requests.exceptions.ConnectionError:
+                    print("❌ Network connection failed during Razorpay link generation. Resetting session.")
+                    db_manager.set_session_state(student_db_id, 'initial', None)
+                    # Use bot.send_message for a new, clean reply
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ Connection failed while talking to Razorpay. Please tap 'Menu 🍽️' to try a new order.",
+                        reply_markup=get_main_reply_keyboard()
+                    )
+                    return
+                
+            # --- END CRITICAL FIX 1 ---
+
+            if razorpay_order_id and payment_link:
+                # Only update DB if a *new* link was generated or if details were missing
+                if not order.get('razorpay_order_id'):
+                    db_manager.update_razorpay_details(current_order_id, razorpay_order_id, payment_link)
+                    
+                db_manager.update_order_status(current_order_id, 'payment_pending')
+
+                payment_keyboard = create_payment_keyboard(payment_link, current_order_id)
+                
+                payment_qr_path = generate_payment_qr_code(payment_link, current_order_id)
+
+
+                payment_msg = (
+                    f"✅ *Order Ready for Payment! (ID: #{current_order_id})*\n\n"
+                    f"💰 **Total Amount:** ₹{total_amount:.2f}\n\n"
+                    f"💳 **Pay Securely with Razorpay:**\n"
+                    f"👆 Tap the button or scan the QR code below.\n"
+                    f"Status updates automatically after payment."
+                )
+
+                # Edit the confirmation message to display a generating message
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="⏳ Generating payment link and QR code...",
+                        reply_markup=None  # Remove old buttons first
+                    )
+                except telebot.apihelper.ApiTelegramException as e:
+                    if "message is not modified" not in str(e):
+                        print(f"⚠️ Edit message failed before QR send: {e}")
+                        pass
+                
+                # Send the final payment message (new message to ensure delivery)
+                if payment_qr_path:
+                    with open(payment_qr_path, 'rb') as photo:
+                        bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
+                                         reply_markup=payment_keyboard)
+                else:
+                    # This path is taken when PIL is missing or QR generation fails.
+                    bot.send_message(chat_id, payment_msg, parse_mode='Markdown', reply_markup=payment_keyboard)
+
+                db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
+                return
+            else:
+                # This catches Razorpay internal errors or invalid response where no link was generated
+                db_manager.set_session_state(student_db_id, 'initial', None)
+                bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Could not generate payment link. Please tap 'Menu 🍽️' to try again.",
+                    reply_markup=get_main_reply_keyboard()
+                )
+                return
+
+
+    except Exception as e: # This is the final catch-all block that was causing the SyntaxError
         # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")
         traceback.print_exc()
@@ -1715,8 +1716,8 @@ def start_cleanup_thread():
 def run_polling_service():
     """Starts the Telegram bot polling loop in its own dedicated service/process."""
     print("\n🚀 Starting Telegram Bot Polling Service...")
-    print("    📡 Bot is now listening for messages...")
-    print("    ⏹️  Press Ctrl+C to stop\n")
+    print("     📡 Bot is now listening for messages...")
+    print("     ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
     # CRITICAL FIX: Delete webhook before starting polling

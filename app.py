@@ -1136,7 +1136,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
 
     # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
-    # This block is now outside the preceding if/elif structure, which was the cause of the SyntaxError.
     elif command_type == 'archive_view_file':
         filename = data.split(':')[1]
         archived_orders = db_manager.get_archived_orders_by_filename(filename)

@@ -68,8 +68,44 @@ except Exception as e:
 app = Flask(__name__)
 
 
-# Flask will run in a separate thread/process managed by the main script
+# --- NEW MENU STRUCTURE & TIME CONFIGURATION ---
 
+# The canonical source for time-based menu sections and display times.
+MENU_SECTIONS = {
+    'breakfast': {'time': '9:00 - 11:30', 'start_hr': 9, 'end_hr': 11, 'end_min': 30},
+    'lunch': {'time': '12:00 - 4:00', 'start_hr': 12, 'end_hr': 16, 'end_min': 0},
+    'snacks': {'time': 'All Day', 'start_hr': 0, 'end_hr': 23, 'end_min': 59} # 24/7 equivalent
+}
+
+# Timezone configuration for the bot's operating hours (9:00 - 17:00 IST)
+# Assumes IST (UTC + 5 hours 30 minutes)
+IST = timezone(timedelta(hours=5, minutes=30))
+OPERATING_START_HOUR = 9
+OPERATING_END_HOUR = 17 # 5 PM (exclusive)
+
+# --- BOT AVAILABILITY CHECK ---
+
+def is_bot_available_now() -> bool:
+    """Checks if the current time is between OPERATING_START_HOUR (9) and OPERATING_END_HOUR (17) in IST."""
+    try:
+        # 1. Get current time in IST
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc.astimezone(IST)
+        current_time = now_ist.time()
+        
+        # 2. Define the availability window
+        start_time = time(OPERATING_START_HOUR, 0, 0)
+        end_time = time(OPERATING_END_HOUR, 0, 0)
+        
+        # 3. Check if current time is within the range [start, end)
+        return start_time <= current_time < end_time
+    except Exception as e:
+        print(f"❌ Error in is_bot_available_now: {e}")
+        return False # Default to unavailable on error
+
+def unavailable_message(chat_id):
+    """Sends the standard unavailability message."""
+    bot.send_message(chat_id, "The canteen bot will be available only between 9-5.")
 
 # --- FLASK ENDPOINT REGISTRATION FUNCTION (All Web Routes) ---
 
@@ -136,7 +172,7 @@ def setup_flask_routes():
         except Exception as e:
             print(f"❌ Webhook signature verification failed: {e}")
             return jsonify(success=False,
-                           message="Signature verification failed: Secret mismatch or internal library error"), 400
+                            message="Signature verification failed: Secret mismatch or internal library error"), 400
 
         # 3. Process the event
         try:
@@ -282,7 +318,6 @@ def setup_flask_routes():
 def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
     """
     Creates a Razorpay Payment Link object and returns its details.
-    FIXED: Uses a UUID for reference_id to avoid the CANTN_20251006_1 conflict.
     """
     if not BOT_PUBLIC_URL or not BOT_PUBLIC_URL.startswith('http'):
         print("❌ CRITICAL ERROR: BOT_PUBLIC_URL is missing or invalid.")
@@ -437,19 +472,31 @@ def get_main_reply_keyboard():
     return markup
 
 
-# NEW: Admin Reply Keyboard (Replaces text command input)
+# NEW: Admin Reply Keyboard (Replaces Menu 🍽️ with Orders 📦)
 def get_admin_reply_keyboard():
     """Creates the persistent reply keyboard for admins."""
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
     btn_admin = KeyboardButton('Admin Panel ⚙️')
-    btn_menu = KeyboardButton('Menu 🍽️')
-    markup.add(btn_admin, btn_menu)
+    btn_orders = KeyboardButton('Orders 📦') # MODIFIED
+    markup.add(btn_admin, btn_orders)
+    return markup
+
+
+# NEW: Orders Dashboard Keyboard
+def get_orders_dashboard_keyboard():
+    """Generates the main inline keyboard for the Orders dashboard."""
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        InlineKeyboardButton("📦 Today Orders", callback_data="admin_orders_today"),
+        InlineKeyboardButton("🗄️ Archived Orders", callback_data="admin_orders_archive")
+    )
+    markup.row(InlineKeyboardButton("↩️ Back to Main", callback_data="admin_dashboard")) # Changed from admin_dashboard_main to admin_dashboard
     return markup
 
 
 # NEW: Admin Inline Dashboard (Simplified)
 def get_admin_dashboard_keyboard():
-    """Generates the main inline keyboard for the admin dashboard."""
+    """Generates the main inline keyboard for the admin dashboard (menu and stats)."""
     markup = InlineKeyboardMarkup(row_width=2)
     # Row 1: View Menu and View Stats
     markup.row(
@@ -546,9 +593,43 @@ def get_confirmation_inline_keyboard():
 
 # --- UTILITY FUNCTIONS ---
 
+def get_menu_text_with_sections():
+    """Formats the menu with section headers and times and returns item list."""
+    menu = db_manager.get_menu()
+    
+    # Organize items by section
+    items_by_section = {key: [] for key in MENU_SECTIONS.keys()}
+    for item in menu:
+        section = item['section'].lower()
+        if section in items_by_section:
+            items_by_section[section].append(item)
+        else:
+            # Fallback for unhandled sections
+            items_by_section['snacks'].append(item)
+            
+    menu_text = "🍽️ **Digital Canteen Menu** 📋\n\n"
+    
+    # 1. Display Section Times and Items
+    for section, data in MENU_SECTIONS.items():
+        time_str = data['time']
+        section_name = section.title()
+        
+        menu_text += f"*{section_name}* ({time_str})\n"
+        
+        if items_by_section[section]:
+            for item in items_by_section[section]:
+                 menu_text += f"   - **ID {item['id']}:** {item['name'].title()} - *₹{item['price']:.2f}*\n"
+        else:
+            menu_text += "   - *No items available for this section.*\n"
+        menu_text += "\n"
+        
+    menu_text += "*Select an item below to begin your order.*"
+    return menu_text
+
+
 def escape_markdown(text):
     """Escapes special characters in text for Telegram Markdown V2."""
-    escape_chars = r'_*`[]()~>#+-=|{}.!'
+    escape_chars = r'_*`[]()~>#+-|=|{}.!'
     return "".join(['\\' + char if char in escape_chars else char for char in text])
 
 
@@ -677,7 +758,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
         # We MUST use MarkdownV2 here, so the caption must be fully escaped.
         with open(ticket_qr_path, 'rb') as photo:
             bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2', # Changed to V2
-                           reply_markup=main_keyboard)
+                            reply_markup=main_keyboard)
     else:
         # Fallback message uses MarkdownV2
         fallback_msg = (
@@ -760,10 +841,10 @@ def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, qua
                 raise
 
 
-# Handler for the /viewarchive text command to send the inline keyboard
+# Handler for the /archive text command to send the inline keyboard
 def view_archives_command_handler(chat_id):
     """
-    Handles the /viewarchive text command by sending a new message with archive file buttons.
+    Handles the /archive text command by sending a new message with archive file buttons.
     """
     archive_files = db_manager.get_archive_file_list()
 
@@ -815,19 +896,32 @@ def handle_admin_text_commands(msg, chat_id):
         send_admin_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
 
     # --- Menu Management Logic ---
-    if command == 'add':
-        if len(parts) < 3:
-            send_admin_message_wrapper("❌ Invalid format. Use: `add <item name> <price>`")
+    if command == 'add' or (command == 'update' and parts[1] == 'menu'):
+        # NEW SYNTAX: add menu <section> <item name> <price> (or update menu <section> <item name> <price>)
+        if len(parts) < 5:
+            send_admin_message_wrapper("❌ Invalid syntax for menu update. Use: `add menu <section> <Item Name> <Price>`")
             return
+
+        section_key = parts[2].lower()
         try:
             price = float(parts[-1])
-            item_name = ' '.join(parts[1:-1])
-            result = db_manager.add_menu_item(item_name, price)
-            send_admin_message_wrapper(result)
+            item_name = ' '.join(parts[3:-1])
         except ValueError:
             send_admin_message_wrapper("❌ Invalid price format. Please use a number.")
+            return
+        
+        # Check if the section is valid (we only check the key, case-insensitive)
+        if section_key not in MENU_SECTIONS:
+            send_admin_message_wrapper(f"❌ Invalid section '{section_key}'. Must be one of: {', '.join(MENU_SECTIONS.keys())}")
+            return
+        
+        # Use the new DB function to add/update item
+        result = db_manager.add_menu_item(item_name, price, section_key)
+        send_admin_message_wrapper(result)
+        return
 
     elif command == 'update':
+        # TRADITIONAL SYNTAX: update <id> <price> (kept as fallback/simplicity)
         if len(parts) != 3:
             send_admin_message_wrapper("❌ Invalid format. Use: `update <id> <price>`")
             return
@@ -850,8 +944,8 @@ def handle_admin_text_commands(msg, chat_id):
         except ValueError:
             send_admin_message_wrapper("❌ Invalid ID format. Please use a whole number.")
 
-    # --- TEXT COMMAND LOGIC for orders ---
-    elif command in ['/todayorders', '/today', '/liveorders']:
+    # --- TEXT COMMAND LOGIC for orders (RENAMED: /today and /archive) ---
+    elif command in ['/todayorders', '/today', 'today', '/liveorders']: # /today is the new primary name
         today_orders = db_manager.get_today_orders()
 
         if not today_orders:
@@ -883,16 +977,16 @@ def handle_admin_text_commands(msg, chat_id):
 
                 orders_text += (
                     f"{status_emoji} **Order #{order['id']}**\n"
-                    f"  - Status: {order['status'].title()}\n"
-                    f"  - Total: ₹{order['total_amount']:.2f}\n"
-                    f"  - Items: {item_summary}\n"
-                    f"  - Time: {time_part}\n\n"
+                    f"  - Status: {order['status'].title()}\n"
+                    f"  - Total: ₹{order['total_amount']:.2f}\n"
+                    f"  - Items: {item_summary}\n"
+                    f"  - Time: {time_part}\n\n"
                 )
 
         send_admin_message_wrapper(orders_text)
         return
 
-    elif command in ['/viewarchive', '/archive', '/history']:
+    elif command in ['/viewarchive', '/archive', 'archive', '/history']: # /archive is the new primary name
         # Call the dedicated handler for archive viewing. This is now robust.
         view_archives_command_handler(chat_id)
         return
@@ -908,11 +1002,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
         """
         Attempts to edit the inline message.
         """
-        # Helper for going back to the main admin dashboard
-        back_to_dashboard_inline = InlineKeyboardMarkup().row(
-            InlineKeyboardButton("↩️ Back to Dashboard", callback_data="admin_dashboard")
-        )
-
+        
         try:
             bot.edit_message_text(
                 chat_id=chat_id,
@@ -942,26 +1032,57 @@ def handle_admin_callbacks(data, chat_id, message_id):
         InlineKeyboardButton("↩️ Back to Dashboard", callback_data="admin_dashboard")
     )
 
-    # Helper to go back to Order Instructions (used after viewing an archive file)
-    back_to_orders_instruct = InlineKeyboardMarkup().row(
-        InlineKeyboardButton("↩️ Back to Orders Instructions", callback_data="admin_view_orders_instruct")
+    # Helper to go back to Orders dashboard (used below)
+    back_to_orders_dashboard = InlineKeyboardMarkup().row(
+        InlineKeyboardButton("↩️ Back to Orders", callback_data="admin_orders_dashboard")
     )
 
-    if command == 'dashboard':
+
+    elif command == 'dashboard':
         edit_message(
             text="⚙️ **Admin Dashboard**\n\nSelect an action:",
             reply_markup=get_admin_dashboard_keyboard()
         )
         return
 
+    # NEW: Handle Orders dashboard navigation
+    elif data == 'admin_orders_dashboard':
+        edit_message(
+            text="📦 **Order Management**\n\nSelect an order view:",
+            reply_markup=get_orders_dashboard_keyboard()
+        )
+        return
+
+    elif data == 'admin_orders_today':
+        # 1. Send the data in a new message using the existing text command handler
+        handle_admin_text_commands('/today', chat_id) 
+        
+        # 2. Edit the inline message to a clean status message with navigation
+        edit_message("✅ **Live Orders** sent above. Use the button below to go back.", 
+                     reply_markup=back_to_orders_dashboard)
+        return
+
+    elif data == 'admin_orders_archive':
+        # 1. Send the data (archive list) in a new message
+        view_archives_command_handler(chat_id) 
+        
+        # 2. Edit the inline message to a clean status message with navigation
+        edit_message("✅ **Archive List** sent above. Select a date to view history.", 
+                     reply_markup=back_to_orders_dashboard)
+        return
+
+
     elif command == 'menu':
         menu = db_manager.get_menu()
         if menu:
-            menu_text = "📋 **Current Menu Items**\n\n"
-            for item in menu:
-                # Use Markdown
-                menu_text += f"**ID {item['id']}: {item['name'].title()}** - *₹{item['price']:.2f}*\n"
-            edit_message(menu_text, back_to_dashboard)
+            # MODIFIED: Use the new section-based display for the admin view
+            menu_text = get_menu_text_with_sections()
+            
+            # Also add a simple list of ID/Name for easy updating
+            simple_list = "\n\n--- Item IDs ---\n"
+            simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+                 
+            edit_message(menu_text + simple_list, back_to_dashboard)
         else:
             edit_message("📋 The menu is currently empty.", back_to_dashboard)
         return
@@ -987,23 +1108,20 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
     # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
     elif command == 'help':
+        # MODIFIED: Removed order viewing instructions
         help_text = (
             f"❓ **Admin Instructions & Commands**\n\n"
             f"All management functions are performed using **text commands**.\n"
             f"-----------------------------------------\n"
-
-            f"🧾 **Order Viewing Commands**:\n"
-            f"1. **Live Orders**: Type `/todayorders`\n"
-            f"2. **Archived History**: Type `/viewarchive`\n"
-            f"-----------------------------------------\n"
-
+            
             f"📋 **Menu Management Commands**:\n"
+            f"The menu is divided into sections: {', '.join([s.title() for s in MENU_SECTIONS.keys()])}.\n\n"
 
-            f"**1. Add New Item:**\n"
-            f"• **Syntax**: `add <Item Name> <Price>`\n"
-            f"• **Example**: `add Chicken Roll 80`\n\n"
+            f"**1. Add/Update Item by Name:** (Uses requested section syntax)\n"
+            f"• **Syntax**: `add menu <section> <Item Name> <Price>`\n"
+            f"• **Example**: `add menu breakfast Dosa 45`\n\n"
 
-            f"**2. Update Price:**\n"
+            f"**2. Update Price by ID:** (Fallback)\n"
             f"• **Syntax**: `update <Item ID> <New Price>`\n"
             f"• **Example**: `update 5 15.50`\n\n"
 
@@ -1016,21 +1134,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
         edit_message(help_text, back_to_dashboard)
         return
 
-    # --- ORDER VIEW INSTRUCTIONS (Triggered by 'View Orders' button) ---
-    elif command == 'view_orders_instruct':
-        instruct_text = (
-            "🧾 **Order Viewing Instructions**\n\n"
-            "To view orders, please use the following **text commands**:\n\n"
-            "1. **View Today's Orders (Live):**\n"
-            "   Type `/todayorders`\n"
-            "   (Shows all orders from the current day)\n\n"
-            "2. **View Archived Orders (History):**\n"
-            "   Type `/viewarchive`\n"
-            "   (Displays clickable archive files for previous days)\n"
-        )
-        edit_message(instruct_text, back_to_dashboard)
-        return
-
     # This callback is used when hitting the 'Back to Archives' button after viewing a file
     elif command == 'view_archives' and command_type == 'admin':
         # Rebuild the archive list using the dedicated handler
@@ -1038,14 +1141,14 @@ def handle_admin_callbacks(data, chat_id, message_id):
         return
 
 
-    # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /viewarchive text command) ---
+    # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
     elif command_type == 'archive_view_file':
         filename = data.split(':')[1]
         archived_orders = db_manager.get_archived_orders_by_filename(filename)
 
         if not archived_orders:
             archive_text = f"❌ **Archive Error**\n\nFile not found or corrupted: `{filename}`"
-            edit_message(archive_text, back_to_orders_instruct)
+            edit_message(archive_text, back_to_orders_dashboard) 
             return
 
         date_part = filename.replace('orders_archived_before_', '').replace('.json', '')
@@ -1074,11 +1177,10 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             archive_text += (
                 f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
-                f"  - Items: {item_summary}\n"
+                f"  - Items: {item_summary}\n"
             )
 
-        # back_to_orders_instruct points to the order instructions panel.
-        edit_message(archive_text, back_to_orders_instruct)
+        edit_message(archive_text, back_to_orders_dashboard) 
         return
 
 
@@ -1088,9 +1190,16 @@ def handle_admin_callbacks(data, chat_id, message_id):
 def handle_incoming_message(message: Message):
     """Processes all incoming Telegram messages (admin commands, typed quantity, contact share, etc.)."""
     try:
+        from_chat_id = message.chat.id
+        
+        # --- TIME RESTRICTION CHECK (Applies to all non-admin commands) ---
+        if from_chat_id not in ADMIN_CHAT_IDS:
+            if not is_bot_available_now():
+                unavailable_message(from_chat_id)
+                return
+        
         incoming_msg = message.text.strip() if message.text else ''
         incoming_msg_lower = incoming_msg.lower()
-        from_chat_id = message.chat.id
         student_db_id = str(from_chat_id)
         current_state = db_manager.get_session_state(student_db_id)
 
@@ -1106,14 +1215,26 @@ def handle_incoming_message(message: Message):
                     reply_markup=get_admin_dashboard_keyboard()
                 )
                 return
+            
+            # NEW: Handle "Orders 📦" button click (Reply Keyboard)
+            if incoming_msg == 'Orders 📦':
+                bot.send_message(
+                    from_chat_id,
+                    "📦 **Order Management**\n\nSelect an order view:",
+                    parse_mode='Markdown',
+                    reply_markup=get_orders_dashboard_keyboard() # Sends inline orders dashboard
+                )
+                return
 
             # Handle all admin text commands (menu management AND new view commands)
             if incoming_msg_lower.startswith(('add ', 'update ', 'delete ')) or incoming_msg_lower in ['/todayorders',
-                                                                                                      '/today',
-                                                                                                      '/liveorders',
-                                                                                                      '/viewarchive',
-                                                                                                      '/archive',
-                                                                                                      '/history']:
+                                                                                                        '/today',
+                                                                                                        'today', # New alias
+                                                                                                        '/liveorders',
+                                                                                                        '/viewarchive',
+                                                                                                        '/archive',
+                                                                                                        'archive', # New alias
+                                                                                                        '/history']:
                 handle_admin_text_commands(incoming_msg_lower, from_chat_id)
                 return
 
@@ -1255,11 +1376,12 @@ def handle_incoming_message(message: Message):
                                          db_manager.get_session_order_id(student_db_id))
             return
 
-        # --- UNIVERSAL COMMANDS (Unchanged) ---
+        # --- UNIVERSAL COMMANDS (Updated) ---
         if incoming_msg_lower in ['menu', 'hi', 'hello', 'start', 'restart', '/start', 'menu 🍽️',
                                   'cancel/back to menu ❌']:
 
             if from_chat_id in ADMIN_CHAT_IDS:
+                # If an admin sends a generic start/menu command, greet them with the admin keyboard
                 bot.send_message(from_chat_id, "💬 Welcome back! Select an option below.",
                                  reply_markup=get_admin_reply_keyboard())
                 return
@@ -1285,7 +1407,7 @@ def handle_incoming_message(message: Message):
             if from_chat_id in ADMIN_CHAT_IDS:
                 reply_markup = get_admin_reply_keyboard()
                 bot.send_message(from_chat_id,
-                                 "💬 Welcome! Tap 'Admin Panel ⚙️' or 'Menu 🍽️' below.",
+                                 "💬 Welcome! Tap 'Admin Panel ⚙️' or 'Orders 📦' below.",
                                  reply_markup=reply_markup)
             else:
                 reply_markup = get_main_reply_keyboard()
@@ -1313,6 +1435,15 @@ def handle_inline_callbacks(call):
     data = call.data
 
     try:
+        # --- TIME RESTRICTION CHECK (Applies to all non-admin commands) ---
+        # Admin callbacks are checked later inside handle_admin_callbacks/delivered logic
+        if chat_id not in ADMIN_CHAT_IDS and not is_bot_available_now():
+            try:
+                bot.answer_callback_query(call.id, "❌ The bot is only available between 9-5.")
+            except:
+                pass
+            return
+            
         # --- CRITICAL FIX: Gracefully handle "query is too old" error ---
         try:
             bot.answer_callback_query(call.id)
@@ -1325,8 +1456,174 @@ def handle_inline_callbacks(call):
 
         # --- ADMIN CALLBACKS (Includes archive_view_file) ---
         if chat_id in ADMIN_CHAT_IDS and (data.startswith('admin_') or data.startswith('archive_view_file:')):
-            handle_admin_callbacks(data, chat_id, message_id)
-            return
+            
+            # Helper function to edit the message (defined inside the handler scope for simplicity)
+            def edit_message(text, reply_markup=None, parse_mode='Markdown'):
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except telebot.apihelper.ApiTelegramException as e:
+                    if "message is not modified" in str(e) or "message can't be edited" in str(e):
+                        return
+                    print(f"⚠️ Edit failed for {data}. Sending new message. Error: {e}")
+                    # Fallback to sending a new message
+                    bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            
+            # Helper for going back to the main admin dashboard (used below)
+            back_to_dashboard = InlineKeyboardMarkup().row(
+                InlineKeyboardButton("↩️ Back to Dashboard", callback_data="admin_dashboard")
+            )
+
+            # Helper to go back to Orders dashboard (used below)
+            back_to_orders_dashboard = InlineKeyboardMarkup().row(
+                InlineKeyboardButton("↩️ Back to Orders", callback_data="admin_orders_dashboard")
+            )
+
+
+            if data == 'admin_dashboard':
+                edit_message(
+                    text="⚙️ **Admin Dashboard**\n\nSelect an action:",
+                    reply_markup=get_admin_dashboard_keyboard()
+                )
+                return
+
+            # NEW: Handle Orders dashboard navigation
+            elif data == 'admin_orders_dashboard':
+                edit_message(
+                    text="📦 **Order Management**\n\nSelect an order view:",
+                    reply_markup=get_orders_dashboard_keyboard()
+                )
+                return
+
+            elif data == 'admin_orders_today':
+                # 1. Send the data in a new message using the existing text command handler
+                handle_admin_text_commands('/today', chat_id) 
+                
+                # 2. Edit the inline message to a clean status message with navigation
+                edit_message("✅ **Live Orders** sent above. Use the button below to go back.", 
+                             reply_markup=back_to_orders_dashboard)
+                return
+
+            elif data == 'admin_orders_archive':
+                # 1. Send the data (archive list) in a new message
+                view_archives_command_handler(chat_id) 
+                
+                # 2. Edit the inline message to a clean status message with navigation
+                edit_message("✅ **Archive List** sent above. Select a date to view history.", 
+                             reply_markup=back_to_orders_dashboard)
+                return
+
+
+            elif data == 'admin_menu':
+                menu = db_manager.get_menu()
+                if menu:
+                    # MODIFIED: Use the new section-based display for the admin view
+                    menu_text = get_menu_text_with_sections()
+                    
+                    # Also add a simple list of ID/Name for easy updating
+                    simple_list = "\n\n--- Item IDs ---\n"
+                    simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+                        
+                    edit_message(menu_text + simple_list, back_to_dashboard)
+                else:
+                    edit_message("📋 The menu is currently empty.", back_to_dashboard)
+                return
+
+            elif data == 'admin_stats':
+                stats = db_manager.get_order_statistics()
+                if stats:
+                    # CRITICAL FIX: Using PLAIN TEXT to guarantee no Markdown parsing errors
+                    stats_text = (
+                        f"📈 Canteen Statistics\n\n"
+                        f"Total Orders: {stats['total_orders']}\n"
+                        f"Total Revenue: ₹{stats['total_revenue']:.2f}\n"
+                        f"Today's Orders: {stats['today_orders']}\n"
+                        f"Orders by Status:\n"
+                    )
+                    for status, count in stats['status_counts'].items():
+                        stats_text += f"- {status.replace('_', ' ').title()}: {count}\n"
+
+                    edit_message(stats_text, back_to_dashboard, parse_mode=None)  # Use PLAIN TEXT
+                else:
+                    edit_message("📈 Unable to retrieve statistics.", back_to_dashboard)
+                return
+
+            # --- UNIFIED INSTRUCTIONS PANEL (Triggered by 'Instructions' button) ---
+            elif data == 'admin_help':
+                # MODIFIED: Removed order viewing instructions
+                help_text = (
+                    f"❓ **Admin Instructions & Commands**\n\n"
+                    f"All management functions are performed using **text commands**.\n"
+                    f"-----------------------------------------\n"
+                    
+                    f"📋 **Menu Management Commands**:\n"
+                    f"The menu is divided into sections: {', '.join([s.title() for s in MENU_SECTIONS.keys()])}.\n\n"
+
+                    f"**1. Add/Update Item by Name:** (Uses requested section syntax)\n"
+                    f"• **Syntax**: `add menu <section> <Item Name> <Price>`\n"
+                    f"• **Example**: `add menu breakfast Dosa 45`\n\n"
+
+                    f"**2. Update Price by ID:** (Fallback)\n"
+                    f"• **Syntax**: `update <Item ID> <New Price>`\n"
+                    f"• **Example**: `update 5 15.50`\n\n"
+
+                    f"**3. Delete/Remove Item:**\n"
+                    f"• **Syntax**: `delete <Item ID>`\n"
+                    f"• **Example**: `delete 3`\n\n"
+
+                    f"*Tip*: Use 'View Menu' to find the Item ID first."
+                )
+                edit_message(help_text, back_to_dashboard)
+                return
+
+
+            # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
+            elif command_type == 'archive_view_file':
+                filename = data.split(':')[1]
+                archived_orders = db_manager.get_archived_orders_by_filename(filename)
+
+                if not archived_orders:
+                    archive_text = f"❌ **Archive Error**\n\nFile not found or corrupted: `{filename}`"
+                    edit_message(archive_text, back_to_orders_dashboard) 
+                    return
+
+                date_part = filename.replace('orders_archived_before_', '').replace('.json', '')
+                try:
+                    # FIX: Calculate the date the data was created (one day before cutoff date)
+                    cutoff_date = datetime.strptime(date_part, '%Y-%m-%d')
+                    data_date = cutoff_date - timedelta(days=1)
+                    display_date = data_date.strftime('%d %b %Y')
+                except ValueError:
+                    display_date = "N/A"
+
+                archive_text = f"📄 **Archived Orders (Data up to {display_date})** ({len(archived_orders)} total)\n\n"
+
+                for order in archived_orders:
+                    status_emoji = {
+                        'pending': '🟡', 'payment_pending': '🟠', 'paid': '🟢',
+                        'cancelled': '🔴', 'expired': '⚫', 'delivered': '🔵'
+                    }.get(order.get('status', 'N/A'), '⚪')
+
+                    items_data = order.get('items', [])
+                    item_summary = ", ".join([f"{item.get('name', 'Item')} x{item.get('qty', 1)}" for item in items_data])
+
+                    order_id = order.get('id', 'N/A')
+                    status = order.get('status', 'N/A').title()
+                    total = order.get('total_amount', 0.0)
+
+                    archive_text += (
+                        f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
+                        f"  - Items: {item_summary}\n"
+                    )
+
+                edit_message(archive_text, back_to_orders_dashboard) 
+                return
+
 
         # --- NEW DELIVERY CALLBACK (Unchanged) ---
         if data.startswith('delivered:'):
@@ -1428,7 +1725,7 @@ def handle_inline_callbacks(call):
 
             if not item or current_order_id is None:
                 start_menu_flow(student_db_id, chat_id, message_id,
-                                error_msg="⚠️ Error processing item/order. Restarting.")
+                                 error_msg="⚠️ Error processing item/order. Restarting.")
                 return
 
             # Edit message to show quantity buttons
@@ -1437,7 +1734,7 @@ def handle_inline_callbacks(call):
                     chat_id=chat_id,
                     message_id=message_id,
                     text=f"📦 You selected *{item['name'].title()}* (₹{item['price']:.2f}).\n\n"
-                         f"Please select the **quantity** required for this item:",
+                          f"Please select the **quantity** required for this item:",
                     parse_mode='Markdown',
                     reply_markup=get_quantity_inline_keyboard(item_id)
                 )
@@ -1668,7 +1965,7 @@ def handle_inline_callbacks(call):
                 if payment_qr_path:
                     with open(payment_qr_path, 'rb') as photo:
                         bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
-                                       reply_markup=payment_keyboard)
+                                         reply_markup=payment_keyboard)
                 else:
                     # This path is taken when PIL is missing or QR generation fails.
                     bot.send_message(chat_id, payment_msg, parse_mode='Markdown', reply_markup=payment_keyboard)
@@ -1722,6 +2019,7 @@ def prompt_for_phone_number(student_db_id, chat_id):
 def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
     """
     Initiates the menu flow using Inline Keyboards.
+    MODIFIED: Uses the new section-based menu display.
     """
 
     # 1. Check for active order or create a new one
@@ -1746,13 +2044,12 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
 
     menu = db_manager.get_menu()
 
-    main_message = f"🍽️ *Welcome to Digital Canteen!* 👋\n\n"
+    # MODIFIED: Get the menu text from the dedicated function
+    main_message = get_menu_text_with_sections()
     if error_msg:
         main_message = f"{error_msg}\n\n" + main_message
 
     if menu:
-        main_message += "📋 *Please select an item to order:*"
-
         if message_id:
             try:
                 bot.edit_message_text(
@@ -1772,7 +2069,7 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
                         parse_mode='Markdown',
                         reply_markup=get_menu_inline_keyboard(student_db_id)
                     )
-                
+
         else:
             bot.send_message(
                 chat_id=chat_id,
@@ -1866,8 +2163,8 @@ def start_cleanup_thread():
 def run_polling_service():
     """Starts the Telegram bot polling loop in its own dedicated service/process."""
     print("\n🚀 Starting Telegram Bot Polling Service...")
-    print("    📡 Bot is now listening for messages...")
-    print("    ⏹️  Press Ctrl+C to stop\n")
+    print("    📡 Bot is now listening for messages...")
+    print("    ⏹️  Press Ctrl+C to stop\n")
     print("=" * 50)
 
     # CRITICAL FIX: Delete webhook before starting polling
@@ -1885,7 +2182,7 @@ def run_polling_service():
     # 1. Aggressive reset and table creation
     if db_manager.aggressive_db_reset():
         print("✅ Database file reset successful.")
-        
+    
     if db_manager.create_tables():
         print("✅ Database tables created/verified successfully!")
     else:
@@ -1894,7 +2191,7 @@ def run_polling_service():
 
     db_manager.add_default_menu_items()
     db_manager.archive_and_reset_daily_orders()
-    db_manager.cleanup_old_sessions() 
+    db_manager.cleanup_old_sessions()  
     start_cleanup_thread()
     print("=" * 50)
     

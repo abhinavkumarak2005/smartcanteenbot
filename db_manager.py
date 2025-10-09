@@ -42,49 +42,50 @@ def create_tables():
 
         cursor = conn.cursor()
 
-        # Create menu table
+        # Create menu table (MODIFIED: Added 'section' column)
         cursor.execute('''
-                       CREATE TABLE IF NOT EXISTS menu
-                       (
-                           id INTEGER PRIMARY KEY AUTOINCREMENT,
-                           name TEXT NOT NULL,
-                           price REAL NOT NULL,
-                           available BOOLEAN DEFAULT 1,
-                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                       )
-                       ''')
+                        CREATE TABLE IF NOT EXISTS menu
+                        (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT NOT NULL,
+                            price REAL NOT NULL,
+                            section TEXT NOT NULL DEFAULT 'snacks',
+                            available BOOLEAN DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        ''')
 
         # Create orders table
         cursor.execute('''
-                       CREATE TABLE IF NOT EXISTS orders
-                       (
-                           id INTEGER PRIMARY KEY AUTOINCREMENT,
-                           student_phone TEXT NOT NULL,
-                           items TEXT NOT NULL,
-                           total_amount REAL NOT NULL,
-                           status TEXT DEFAULT 'pending',
-                           payment_link TEXT,
-                           payment_expires_at TEXT,
-                           pickup_code TEXT,
-                           razorpay_order_id TEXT,
-                           service_type TEXT,
-                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                       )
-                       ''')
+                        CREATE TABLE IF NOT EXISTS orders
+                        (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_phone TEXT NOT NULL,
+                            items TEXT NOT NULL,
+                            total_amount REAL NOT NULL,
+                            status TEXT DEFAULT 'pending',
+                            payment_link TEXT,
+                            payment_expires_at TEXT,
+                            pickup_code TEXT,
+                            razorpay_order_id TEXT,
+                            service_type TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        ''')
 
         # Create user sessions/users table
         cursor.execute('''
-                       CREATE TABLE IF NOT EXISTS users
-                       (
-                           id TEXT PRIMARY KEY,
-                           phone_number TEXT,
-                           session_state TEXT DEFAULT 'initial',
-                           current_order_id INTEGER,
-                           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                           last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                       )
-                       ''')
+                        CREATE TABLE IF NOT EXISTS users
+                        (
+                            id TEXT PRIMARY KEY,
+                            phone_number TEXT,
+                            session_state TEXT DEFAULT 'initial',
+                            current_order_id INTEGER,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        ''')
 
         # --- MIGRATIONS/COLUMN CHECKS ---
         cursor.execute("PRAGMA table_info(orders)")
@@ -96,7 +97,6 @@ def create_tables():
             cursor.execute('ALTER TABLE orders ADD COLUMN razorpay_order_id TEXT')
             print("✅ Added 'razorpay_order_id' column to orders table.")
 
-        # Check and rename/add columns in user_sessions/users table
         cursor.execute("PRAGMA table_info(users)")
         user_columns = [column[1] for column in cursor.fetchall()]
         if 'phone_number' not in user_columns:
@@ -105,6 +105,17 @@ def create_tables():
                 print("✅ Added 'phone_number' column to users table.")
             except sqlite3.OperationalError:
                 pass
+
+        # NEW MIGRATION: Add 'section' to menu if it doesn't exist
+        cursor.execute("PRAGMA table_info(menu)")
+        menu_columns = [column[1] for column in cursor.fetchall()]
+        if 'section' not in menu_columns:
+            try:
+                cursor.execute("ALTER TABLE menu ADD COLUMN section TEXT DEFAULT 'snacks'")
+                print("✅ Added 'section' column to menu table.")
+            except sqlite3.OperationalError:
+                pass
+
 
         conn.commit()
         conn.close()
@@ -132,7 +143,7 @@ def aggressive_db_reset():
     return True # Return True if file didn't exist
 
 def add_default_menu_items():
-    """Add some default menu items if menu is empty."""
+    """Add some default menu items if menu is empty (MODIFIED to include sections)."""
     try:
         conn = create_connection()
         if not conn:
@@ -146,22 +157,22 @@ def add_default_menu_items():
 
         if count == 0:
             default_items = [
-                ('Samosa', 15.0),
-                ('Tea', 10.0),
-                ('Coffee', 15.0),
-                ('Sandwich', 25.0),
-                ('Dosa', 30.0),
-                ('Idli', 20.0),
-                ('Vada', 15.0),
-                ('Biriyani', 60.0),
-                ('Paratha', 20.0),
-                ('Lassi', 25.0)
+                ('Samosa', 15.0, 'snacks'),
+                ('Tea', 10.0, 'snacks'),
+                ('Coffee', 15.0, 'snacks'),
+                ('Sandwich', 25.0, 'breakfast'),
+                ('Dosa', 30.0, 'breakfast'),
+                ('Idli', 20.0, 'breakfast'),
+                ('Vada', 15.0, 'breakfast'),
+                ('Biriyani', 60.0, 'lunch'),
+                ('Paratha', 20.0, 'lunch'),
+                ('Lassi', 25.0, 'lunch')
             ]
 
-            cursor.executemany('INSERT INTO menu (name, price) VALUES (?, ?)', default_items)
+            cursor.executemany('INSERT INTO menu (name, price, section) VALUES (?, ?, ?)', default_items)
             conn.commit()
             conn.close()
-            logging.info("Default menu items added successfully!")
+            logging.info("Default menu items added successfully with sections!")
 
         conn.close()
         return True
@@ -171,7 +182,7 @@ def add_default_menu_items():
         return False
 
 
-# ========== USER SESSION OPERATIONS (FIXED/ADDED) ==========
+# ========== USER SESSION OPERATIONS (Unchanged) ==========
 
 def set_session_state(user_id, state, order_id=None):
     """
@@ -330,10 +341,10 @@ def cleanup_old_sessions(days_old=30):
         logging.error(f"Error cleaning up old sessions: {e}")
         return 0
 
-# ========== MENU OPERATIONS (Unchanged) ==========
+# ========== MENU OPERATIONS (MODIFIED) ==========
 
 def get_menu():
-    """Get all available menu items."""
+    """Get all available menu items (including section)."""
     try:
         conn = create_connection()
         if not conn:
@@ -351,7 +362,7 @@ def get_menu():
 
 
 def get_menu_item(item_id):
-    """Get single menu item by ID."""
+    """Get single menu item by ID (including section)."""
     try:
         conn = create_connection()
         if not conn:
@@ -367,28 +378,61 @@ def get_menu_item(item_id):
         logging.error(f"Error getting menu item {item_id}: {e}")
         return None
 
+def get_menu_item_by_name(item_name):
+    """Get single menu item by name (case-insensitive, including section)."""
+    try:
+        conn = create_connection()
+        if not conn:
+            return None
 
-def add_menu_item(name, price):
-    """Add new menu item."""
+        cursor = conn.cursor()
+        # Use LIKE and lower() for case-insensitive search
+        cursor.execute('SELECT * FROM menu WHERE LOWER(name) = LOWER(?) AND available = 1', (item_name,))
+        item = cursor.fetchone()
+        conn.close()
+        return dict(item) if item else None
+
+    except Exception as e:
+        logging.error(f"Error getting menu item by name '{item_name}': {e}")
+        return None
+
+def add_menu_item(name, price, section):
+    """Add new menu item, or update price/section if item already exists and is unavailable."""
     try:
         conn = create_connection()
         if not conn:
             return "❌ Database connection error"
 
         cursor = conn.cursor()
-        cursor.execute('INSERT INTO menu (name, price) VALUES (?, ?)', (name, price))
+        
+        # Check if item with this name already exists
+        cursor.execute('SELECT id, available FROM menu WHERE LOWER(name) = LOWER(?)', (name,))
+        existing_item = cursor.fetchone()
+
+        if existing_item:
+            item_id = existing_item['id']
+            # Update price, section, and availability
+            cursor.execute('''
+                UPDATE menu SET price = ?, section = ?, available = 1 WHERE id = ?
+            ''', (price, section, item_id))
+            conn.commit()
+            conn.close()
+            return f"✅ Updated/Re-added '{name}' in *{section.title()}* for ₹{price:.2f} (ID: {item_id})"
+
+        # Item does not exist, insert new item
+        cursor.execute('INSERT INTO menu (name, price, section) VALUES (?, ?, ?)', (name, price, section))
         conn.commit()
         item_id = cursor.lastrowid
         conn.close()
-        return f"✅ Added '{name}' for ₹{price:.2f} (ID: {item_id})"
+        return f"✅ Added '{name}' to *{section.title()}* for ₹{price:.2f} (ID: {item_id})"
 
     except Exception as e:
-        logging.error(f"Error adding menu item: {e}")
-        return "❌ Error adding menu item"
+        logging.error(f"Error adding/updating menu item: {e}")
+        return "❌ Error adding/updating menu item"
 
 
 def update_menu_item(item_id, price):
-    """Update menu item price."""
+    """Update menu item price by ID (traditional admin update)."""
     try:
         conn = create_connection()
         if not conn:
@@ -456,9 +500,9 @@ def create_order(student_phone, order_details, total_amount, status='pending'):
         items_json = json.dumps(order_details)
 
         cursor.execute('''
-                       INSERT INTO orders (student_phone, items, total_amount, status)
-                       VALUES (?, ?, ?, ?)
-                       ''', (student_phone, items_json, total_amount, status))
+                        INSERT INTO orders (student_phone, items, total_amount, status)
+                        VALUES (?, ?, ?, ?)
+                        ''', (student_phone, items_json, total_amount, status))
 
         order_id = cursor.lastrowid
         conn.commit()
@@ -507,11 +551,11 @@ def update_order_status(order_id, status):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       UPDATE orders
-                       SET status     = ?,
-                           updated_at = CURRENT_TIMESTAMP
-                       WHERE id = ?
-                       ''', (status, order_id))
+                        UPDATE orders
+                        SET status      = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        ''', (status, order_id))
 
         success = cursor.rowcount > 0
         conn.commit()
@@ -538,12 +582,12 @@ def update_razorpay_details(order_id, razorpay_id, payment_link):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       UPDATE orders
-                       SET razorpay_order_id = ?,
-                           payment_link      = ?,
-                           updated_at        = CURRENT_TIMESTAMP
-                       WHERE id = ?
-                       ''', (razorpay_id, payment_link, order_id))
+                        UPDATE orders
+                        SET razorpay_order_id = ?,
+                            payment_link      = ?,
+                            updated_at        = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        ''', (razorpay_id, payment_link, order_id))
 
         success = cursor.rowcount > 0
         conn.commit()
@@ -572,12 +616,12 @@ def update_order_cart(order_id, current_items, new_total):
         items_json = json.dumps(current_items)
 
         cursor.execute('''
-                       UPDATE orders
-                       SET items        = ?,
-                           total_amount = ?,
-                           updated_at   = CURRENT_TIMESTAMP
-                       WHERE id = ?
-                       ''', (items_json, new_total, order_id))
+                        UPDATE orders
+                        SET items         = ?,
+                            total_amount = ?,
+                            updated_at   = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        ''', (items_json, new_total, order_id))
 
         success = cursor.rowcount > 0
         conn.commit()
@@ -601,11 +645,11 @@ def update_order_service_type(order_id, service_type):
         cursor = conn.cursor()
 
         cursor.execute('''
-                       UPDATE orders
-                       SET service_type = ?,
-                           updated_at   = CURRENT_TIMESTAMP
-                       WHERE id = ?
-                       ''', (service_type, order_id))
+                        UPDATE orders
+                        SET service_type = ?,
+                            updated_at   = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        ''', (service_type, order_id))
 
         success = cursor.rowcount > 0
         conn.commit()
@@ -629,11 +673,11 @@ def update_order_pickup_code(order_id, pickup_code):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       UPDATE orders
-                       SET pickup_code = ?,
-                           updated_at  = CURRENT_TIMESTAMP
-                       WHERE id = ?
-                       ''', (pickup_code, order_id))
+                        UPDATE orders
+                        SET pickup_code = ?,
+                            updated_at  = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        ''', (pickup_code, order_id))
 
         success = cursor.rowcount > 0
         conn.commit()
@@ -660,10 +704,10 @@ def get_recent_orders(limit=10):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       SELECT *
-                       FROM orders
-                       ORDER BY created_at DESC LIMIT ?
-                       ''', (limit,))
+                        SELECT *
+                        FROM orders
+                        ORDER BY created_at DESC LIMIT ?
+                        ''', (limit,))
 
         orders = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -688,11 +732,11 @@ def get_today_orders():
 
         cursor = conn.cursor()
         cursor.execute('''
-                       SELECT *
-                       FROM orders
-                       WHERE created_at >= ?
-                       ORDER BY created_at ASC
-                       ''', (today_start,))
+                        SELECT *
+                        FROM orders
+                        WHERE created_at >= ?
+                        ORDER BY created_at ASC
+                        ''', (today_start,))
 
         orders = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -720,12 +764,12 @@ def get_orders_for_day(target_date: datetime):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       SELECT *
-                       FROM orders
-                       WHERE created_at >= ?
-                         AND created_at < ?
-                       ORDER BY created_at ASC
-                       ''', (start_of_day, end_of_day))
+                        SELECT *
+                        FROM orders
+                        WHERE created_at >= ?
+                          AND created_at < ?
+                        ORDER BY created_at ASC
+                        ''', (start_of_day, end_of_day))
 
         orders = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -750,11 +794,11 @@ def get_all_orders_up_to_date(cutoff_date: datetime):
 
         cursor = conn.cursor()
         cursor.execute('''
-                       SELECT *
-                       FROM orders
-                       WHERE created_at < ?
-                       ORDER BY created_at ASC
-                       ''', (cutoff_str,))
+                        SELECT *
+                        FROM orders
+                        WHERE created_at < ?
+                        ORDER BY created_at ASC
+                        ''', (cutoff_str,))
 
         orders = [dict(row) for row in cursor.fetchall()]
         conn.close()
@@ -782,20 +826,20 @@ def delete_all_orders_up_to_date(cutoff_date: datetime):
 
         # 1. DELETE the old orders
         cursor.execute('''
-                       DELETE
-                       FROM orders
-                       WHERE created_at < ?
-                       ''', (cutoff_str,))
+                        DELETE
+                        FROM orders
+                        WHERE created_at < ?
+                        ''', (cutoff_str,))
 
         deleted_count = cursor.rowcount
 
         # 2. CRITICAL FIX: Reset the SQLite sequence counter if records were deleted
         if deleted_count > 0:
             cursor.execute('''
-                           UPDATE sqlite_sequence
-                           SET seq = 0
-                           WHERE name = 'orders'
-                           ''')
+                            UPDATE sqlite_sequence
+                            SET seq = 0
+                            WHERE name = 'orders'
+                            ''')
 
         conn.commit()
         conn.close()
@@ -922,14 +966,14 @@ def clear_active_sessions_after_reset():
 
         # Reset sessions actively involved in ordering
         cursor.execute('''
-                       UPDATE users
-                       SET session_state    = 'initial',
-                           current_order_id = NULL,
-                           last_active      = CURRENT_TIMESTAMP
-                       WHERE session_state != 'initial' 
+                        UPDATE users
+                        SET session_state      = 'initial',
+                            current_order_id = NULL,
+                            last_active      = CURRENT_TIMESTAMP
+                        WHERE session_state != 'initial' 
             AND session_state NOT LIKE 'pickup_%' 
             AND session_state NOT LIKE 'waiting_%'
-                       ''')
+                        ''')
 
         cleared_count = cursor.rowcount
         conn.commit()

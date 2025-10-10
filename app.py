@@ -91,14 +91,18 @@ def is_bot_available_now() -> bool:
         # 1. Get current time in IST
         now_utc = datetime.now(timezone.utc)
         now_ist = now_utc.astimezone(IST)
-        current_time = now_ist.time()
         
-        # 2. Define the availability window
-        start_time = time(OPERATING_START_HOUR, 0, 0)
-        end_time = time(OPERATING_END_HOUR, 0, 0)
+        current_hour = now_ist.hour
+        current_minute = now_ist.minute
+        
+        # Convert times to minutes past midnight for simple numerical comparison
+        current_minutes = current_hour * 60 + current_minute
+        start_minutes = OPERATING_START_HOUR * 60
+        end_minutes = OPERATING_END_HOUR * 60
         
         # 3. Check if current time is within the range [start, end)
-        return start_time <= current_time < end_time
+        # e.g., 9:00 (540 min) <= current_minutes < 17:00 (1020 min)
+        return start_minutes <= current_minutes < end_minutes
     except Exception as e:
         print(f"❌ Error in is_bot_available_now: {e}")
         return False # Default to unavailable on error
@@ -1760,14 +1764,16 @@ def handle_reply_keyboard_buttons(message):
     student_db_id = str(chat_id)
     text = message.text.split(' ')[0] # Extract the command part (Menu, Order, Admin, Orders)
     
-    is_admin_action = chat_id in ADMIN_CHAT_IDS and (text in ['Admin', 'Orders'])
+    is_admin = chat_id in ADMIN_CHAT_IDS
+    is_admin_action = is_admin and (text in ['Admin', 'Orders'])
     
-    if not is_admin_action and not is_bot_available_now():
+    # Check 1: Block non-admin users outside operating hours for ordering actions
+    if not is_admin and not is_bot_available_now():
         unavailable_message(chat_id)
         return
 
     # --- ADMIN BUTTONS (Accessible 24/7) ---
-    if chat_id in ADMIN_CHAT_IDS:
+    if is_admin:
         if text == 'Admin':
             bot.send_message(chat_id, "⚙️ **Admin Panel**\n\nSelect an action:", 
                              parse_mode='Markdown', reply_markup=get_admin_dashboard_keyboard())
@@ -1777,7 +1783,7 @@ def handle_reply_keyboard_buttons(message):
                              parse_mode='Markdown', reply_markup=get_orders_dashboard_keyboard())
             return
 
-    # --- USER BUTTONS (Time Restricted) ---
+    # --- USER BUTTONS (Menu/Order Status) ---
     if text == 'Menu':
         # Check if the user is in a state that requires a text input (e.g., typing quantity or phone number)
         current_state = db_manager.get_session_state(student_db_id)
@@ -1804,15 +1810,14 @@ def handle_callbacks(call):
     is_admin = chat_id in ADMIN_CHAT_IDS
     is_admin_callback = is_admin and (data.startswith('admin_') or data.startswith('delivered:'))
 
-    # Time check only for non-admin, non-admin-callback (i.e., customer ordering flow)
-    if not is_admin and not is_bot_available_now():
+    # Time check: Block non-admin users for ordering callbacks (only if it's NOT an admin-specific callback)
+    if not is_admin and not is_admin_callback and not is_bot_available_now():
         # Only send unavailability message if they are actively trying to order (e.g., pressing an item button)
         if data.startswith('item:') or data.startswith('qty:') or data == 'checkout':
              unavailable_message(chat_id)
         return
 
     # --- ADMIN/GENERAL CALLBACKS ---
-    # The unified handler handles both admin and user flow.
     handle_admin_callbacks(data, chat_id, message_id) 
 
 
@@ -1827,11 +1832,13 @@ def handle_text_messages(message):
 
     # 1. ADMIN COMMAND HANDLING (Highest Priority, No Time Limit)
     if is_admin:
+        # If admin sends an unknown text command, handle it as a potential menu command.
         if text.lower() not in ['menu 🍽️', 'order status 📊', 'admin panel ⚙️', 'orders 📦']:
             handle_admin_text_commands(text, chat_id)
             return
-
-    # 2. TIME CHECK for ALL customer actions
+        # If admin sent a known reply button (Menu, Order, Admin, Orders), it was handled by handle_reply_keyboard_buttons
+        
+    # 2. TIME CHECK for ALL customer actions (includes phone/quantity text inputs)
     if not is_admin and not is_bot_available_now():
         unavailable_message(chat_id)
         return

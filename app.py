@@ -105,7 +105,8 @@ def is_bot_available_now() -> bool:
 
 def unavailable_message(chat_id):
     """Sends the standard unavailability message."""
-    bot.send_message(chat_id, "The canteen bot will be available only between 9-5.")
+    # MODIFIED MESSAGE
+    bot.send_message(chat_id, "The canteen bot is currently unavailable. Please place your order only between 9:00 AM and 5:00 PM IST.")
 
 # --- FLASK ENDPOINT REGISTRATION FUNCTION (All Web Routes) ---
 
@@ -1719,14 +1720,19 @@ def send_welcome(message):
     chat_id = message.chat.id
     student_db_id = str(chat_id) # Use chat_id as user ID in DB
 
-    if not is_bot_available_now():
+    # CHECK 1: Admin always gets access
+    if chat_id in ADMIN_CHAT_IDS:
+        is_admin = True
+    # CHECK 2: Public users check time availability
+    elif not is_bot_available_now():
         unavailable_message(chat_id)
         return
+    else:
+        is_admin = False
 
-    # Check if user is admin
-    if chat_id in ADMIN_CHAT_IDS:
+    if is_admin:
         reply_markup = get_admin_reply_keyboard()
-        welcome_msg = "Hello, Admin! Use the buttons below or send a command to manage the system."
+        welcome_msg = "Hello, Admin! Use the buttons below or send a command to manage the system. (Admin access is 24/7)"
     else:
         reply_markup = get_main_reply_keyboard()
         welcome_msg = (
@@ -1752,14 +1758,15 @@ def send_welcome(message):
 def handle_reply_keyboard_buttons(message):
     chat_id = message.chat.id
     student_db_id = str(chat_id)
-
-    if not is_bot_available_now():
+    text = message.text.split(' ')[0] # Extract the command part (Menu, Order, Admin, Orders)
+    
+    is_admin_action = chat_id in ADMIN_CHAT_IDS and (text in ['Admin', 'Orders'])
+    
+    if not is_admin_action and not is_bot_available_now():
         unavailable_message(chat_id)
         return
 
-    text = message.text.split(' ')[0] # Extract the command part (Menu, Order, Admin, Orders)
-    
-    # --- ADMIN BUTTONS ---
+    # --- ADMIN BUTTONS (Accessible 24/7) ---
     if chat_id in ADMIN_CHAT_IDS:
         if text == 'Admin':
             bot.send_message(chat_id, "⚙️ **Admin Panel**\n\nSelect an action:", 
@@ -1770,7 +1777,7 @@ def handle_reply_keyboard_buttons(message):
                              parse_mode='Markdown', reply_markup=get_orders_dashboard_keyboard())
             return
 
-    # --- USER BUTTONS ---
+    # --- USER BUTTONS (Time Restricted) ---
     if text == 'Menu':
         # Check if the user is in a state that requires a text input (e.g., typing quantity or phone number)
         current_state = db_manager.get_session_state(student_db_id)
@@ -1794,13 +1801,19 @@ def handle_callbacks(call):
 
     bot.answer_callback_query(call.id) # Acknowledge the button press instantly
 
-    # --- ADMIN/GENERAL CALLBACKS ---
-    if chat_id in ADMIN_CHAT_IDS and (data.startswith('admin_') or data.startswith('delivered:')):
-        handle_admin_callbacks(data, chat_id, message_id)
+    is_admin = chat_id in ADMIN_CHAT_IDS
+    is_admin_callback = is_admin and (data.startswith('admin_') or data.startswith('delivered:'))
+
+    # Time check only for non-admin, non-admin-callback (i.e., customer ordering flow)
+    if not is_admin and not is_bot_available_now():
+        # Only send unavailability message if they are actively trying to order (e.g., pressing an item button)
+        if data.startswith('item:') or data.startswith('qty:') or data == 'checkout':
+             unavailable_message(chat_id)
         return
-    
-    # --- USER ORDERING CALLBACKS ---
-    handle_admin_callbacks(data, chat_id, message_id) # Reuse the unified callback handler for users
+
+    # --- ADMIN/GENERAL CALLBACKS ---
+    # The unified handler handles both admin and user flow.
+    handle_admin_callbacks(data, chat_id, message_id) 
 
 
 # Handler for all text messages (used for admin commands, phone entry, and quantity entry)
@@ -1810,20 +1823,23 @@ def handle_text_messages(message):
     student_db_id = str(chat_id)
     text = message.text.strip()
     
-    if not is_bot_available_now():
+    is_admin = chat_id in ADMIN_CHAT_IDS
+
+    # 1. ADMIN COMMAND HANDLING (Highest Priority, No Time Limit)
+    if is_admin:
+        if text.lower() not in ['menu 🍽️', 'order status 📊', 'admin panel ⚙️', 'orders 📦']:
+            handle_admin_text_commands(text, chat_id)
+            return
+
+    # 2. TIME CHECK for ALL customer actions
+    if not is_admin and not is_bot_available_now():
         unavailable_message(chat_id)
         return
     
     current_state = db_manager.get_session_state(student_db_id)
     current_order_id = db_manager.get_session_order_id(student_db_id)
 
-    # 1. ADMIN COMMAND HANDLING (Highest Priority)
-    if chat_id in ADMIN_CHAT_IDS:
-        if text.lower() not in ['menu 🍽️', 'order status 📊', 'admin panel ⚙️', 'orders 📦']:
-            handle_admin_text_commands(text, chat_id)
-            return
-
-    # 2. PHONE NUMBER INPUT (Awaiting Phone Number State)
+    # 3. PHONE NUMBER INPUT (Awaiting Phone Number State)
     if current_state == 'awaiting_phone_number':
         # Simple validation: ensure it contains only digits/+, and at least 7 digits
         phone_match = re.match(r'^[+\d]{7,}$', text)
@@ -1834,14 +1850,9 @@ def handle_text_messages(message):
         # Save the phone number
         db_manager.update_user_phone(student_db_id, text)
         
-        # Resume the checkout flow by calling the next logical step (confirmation)
-        # We simulate a "service:parcel" selection to trigger the confirmation message, 
-        # but since we don't have the original message_id to edit, we send a new one.
+        # Resume the checkout flow 
         order_details = db_manager.get_order_details(current_order_id)
         service_type = order_details.get('service_type', 'parcel') # Use saved service type
-        
-        # Send confirmation (cannot edit the original message from here, so send a new one)
-        # RERUN the confirmation flow.
         
         # Send a prompt to the user with the confirmation inline keyboard
         items_list = db_manager.parse_order_items(order_details['items'])
@@ -1870,7 +1881,7 @@ def handle_text_messages(message):
                          reply_markup=get_confirmation_inline_keyboard())
         return
 
-    # 3. TYPED QUANTITY INPUT (Awaiting Typed Quantity State)
+    # 4. TYPED QUANTITY INPUT (Awaiting Typed Quantity State)
     elif current_state.startswith('awaiting_typed_quantity_'):
         try:
             quantity = int(text)
@@ -1890,10 +1901,10 @@ def handle_text_messages(message):
             bot.send_message(chat_id, "❌ Invalid quantity. Please type a valid whole number greater than 0.")
         return
 
-    # 4. DEFAULT FALLBACK
+    # 5. DEFAULT FALLBACK
     else:
         # Default response for unhandled text, ensuring the main keyboard is visible
-        main_keyboard = get_admin_reply_keyboard() if chat_id in ADMIN_CHAT_IDS else get_main_reply_keyboard()
+        main_keyboard = get_admin_reply_keyboard() if is_admin else get_main_reply_keyboard()
         bot.send_message(chat_id, "I'm a Canteen Bot! Please use the buttons below or type /start to begin.", 
                          reply_markup=main_keyboard)
 

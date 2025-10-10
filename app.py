@@ -1111,9 +1111,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 # MODIFIED: Use the new section-based display for the admin view
                 menu_text = get_menu_text_with_sections(is_admin=is_admin_check)
                 
-                # CRITICAL FIX: The redundant '--- Item IDs ---' section is removed.
-                # The IDs are already displayed inline in the menu sections (handled by get_menu_text_with_sections).
-                
                 # CRITICAL FIX: Remove the generic ordering prompt for admin menu view.
                 if is_admin_check:
                     # Only runs for admin view

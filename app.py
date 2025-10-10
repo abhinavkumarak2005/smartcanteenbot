@@ -524,7 +524,7 @@ def get_menu_inline_keyboard(user_id):
         for item in menu:
             # Use 'item:<item_id>' as callback data
             # CRITICAL FIX: Item ID only shown to admin user (used in previous logic for menu text)
-            if user_id in ADMIN_CHAT_IDS:
+            if str(user_id) in [str(admin_id) for admin_id in ADMIN_CHAT_IDS]:
                 button_text = f"ID {item['id']}: {item['name'].title()} (₹{item['price']:.2f})"
             else:
                 button_text = f"{item['name'].title()} (₹{item['price']:.2f})"
@@ -1111,14 +1111,13 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 # MODIFIED: Use the new section-based display for the admin view
                 menu_text = get_menu_text_with_sections(is_admin=is_admin_check)
                 
-                # CRITICAL: Remove item IDs section if not admin
-                if is_admin_check:
-                    simple_list = "\n\n--- Item IDs ---\n"
-                    simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
-                    menu_text += simple_list
+                # CRITICAL FIX: The redundant '--- Item IDs ---' section is removed.
+                # The IDs are already displayed inline in the menu sections (handled by get_menu_text_with_sections).
                 
-                # CRITICAL FIX: Remove 'Select an item below...' if only viewing menu.
-                # However, this button is triggered from an 'ordering' flow, so keep it focused on the start of ordering.
+                # CRITICAL FIX: Remove the generic ordering prompt for admin menu view.
+                if is_admin_check:
+                    # Only runs for admin view
+                    menu_text = menu_text.replace("Select an item below to begin your order.", "Use commands (add/update/delete) or select below.")
                 
                 edit_message(menu_text, get_menu_inline_keyboard(student_db_id))
             else:
@@ -1209,14 +1208,24 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     f"     • {item.get('name', 'Item').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})"
                     for item in items_data
                 ])
+                
+                # Escape necessary fields for MarkdownV2
+                order_id_escaped = escape_markdown(str(order.get('id', 'N/A')))
+                status_escaped = escape_markdown(order.get('status', 'N/A').title())
+                created_at_escaped = escape_markdown(order.get('created_at', 'N/A'))
+                contact_escaped = escape_markdown(user_contact)
+                service_type_escaped = escape_markdown(order.get('service_type', 'N/A').replace('_', ' ').title())
+                total_amount_escaped = escape_markdown(f"{order.get('total_amount', 0.0):.2f}")
+                pickup_code_escaped = escape_markdown(order.get('pickup_code', 'N/A'))
+
 
                 archive_text += (
-                    f"{status_emoji} \\*\\*Order \\#{order.get('id', 'N/A')}\\*\\* \\({order.get('status', 'N/A').title()}\\)\n"
-                    f"  \\- \\*Date/Time\\*\\: {order.get('created_at', 'N/A')}\n"
-                    f"  \\- \\*Contact\\*\\: `{user_contact}`\n"
-                    f"  \\- \\*Service Type\\*\\: {order.get('service_type', 'N/A').replace('_', ' ').title()}\n"
-                    f"  \\- \\*Total\\*\\: ₹{order.get('total_amount', 0.0):.2f}\n"
-                    f"  \\- \\*Verification Code\\*\\: `{order.get('pickup_code', 'N/A')}`\n"
+                    f"{status_emoji} \\*\\*Order \\#{order_id_escaped}\\*\\* \\({status_escaped}\\)\n"
+                    f"  \\- \\*Date/Time\\*\\: {created_at_escaped}\n"
+                    f"  \\- \\*Contact\\*\\: `{contact_escaped}`\n"
+                    f"  \\- \\*Service Type\\*\\: {service_type_escaped}\n"
+                    f"  \\- \\*Total\\*\\: ₹{total_amount_escaped}\n"
+                    f"  \\- \\*Verification Code\\*\\: `{pickup_code_escaped}`\n"
                     f"  \\- \\*Items\\*\\:\n{item_summary_lines}\n\n"
                 )
 
@@ -1650,10 +1659,9 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
         main_message = f"{error_msg}\n\n" + main_message
 
     if is_admin:
-        # Add the Item ID list explicitly for admins at the end of the menu text
-        item_list = "\n\n--- Item IDs ---\n" + "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
-        main_message += item_list
-        # CRITICAL FIX: Remove 'Select an item below...' for admin menu to prevent confusing the view.
+        # CRITICAL FIX: Removed the redundant '--- Item IDs ---' section entirely.
+        
+        # CRITICAL FIX: Remove the generic ordering prompt for admin menu view.
         main_message = main_message.replace("Select an item below to begin your order.", "Use commands (add/update/delete) or select below.")
 
 

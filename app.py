@@ -1924,27 +1924,12 @@ def handle_text_messages(message):
                          reply_markup=main_keyboard)
 
 
-# --- TELEGRAM BOT POLLING FUNCTION (CRITICALLY MODIFIED) ---
-def run_polling_service():
-    """Starts the Telegram bot polling loop in its own dedicated service/process."""
-    print("\n🚀 Starting Telegram Bot Polling Service...")
-    print("     📡 Bot is now listening for messages...")
-    print("     ⏹️  Press Ctrl+C to stop\n")
-    print("=" * 50)
+# --- TELEGRAM BOT POLLING/WEBHOOK SETUP (CRITICALLY MODIFIED) ---
 
-    # CRITICAL FIX: Delete webhook before starting polling
-    try:
-        # This is CRUCIAL to stop any residual webhook calls from conflicting with polling
-        if bot.delete_webhook():
-            print("✅ Successfully cleared existing Telegram webhook.")
-    except Exception as e:
-        # Ignore common errors during initial delete webhook attempt
-        print(f"⚠️ Warning: Could not delete webhook on startup: {e}")
-
-    # Perform ALL setup required for this dedicated polling service
+def setup_bot_environment():
+    """Performs environment checks and initial database setup."""
     print("\n🔧 Initializing Database and Cleanup...")
     
-    # 1. Aggressive reset and table creation
     if db_manager.aggressive_db_reset():
         print("✅ Database file reset successful.")
     
@@ -1952,48 +1937,79 @@ def run_polling_service():
         print("✅ Database tables created/verified successfully!")
     else:
         print("❌ Database initialization failed!")
-        return # Exit if DB fails
+        exit(1)
 
     db_manager.add_default_menu_items()
     db_manager.archive_and_reset_daily_orders()
     db_manager.cleanup_old_sessions()  
     start_cleanup_thread()
     print("=" * 50)
-    
-    print("\nStarting bot polling loop...")
 
-    # The actual polling loop, with error handling for the 409 conflict
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    """Telegram Webhook endpoint to receive updates."""
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        
+        # Process the update in a separate thread to ensure fast response to Telegram
+        threading.Thread(target=bot.process_new_updates, args=[[update]]).start()
+        
+        return 'OK', 200
+    else:
+        # Deny requests not coming from Telegram (simple security check)
+        return 'Bad Request', 403
+
+def set_webhook_and_run_flask():
+    """Sets the webhook and starts the Flask server."""
+    PORT = int(os.environ.get("PORT", 5001))
+
+    # 1. Construct the webhook URL
+    webhook_url = f"{BOT_PUBLIC_URL}/{TOKEN}"
+    
+    # 2. Set the Telegram webhook
+    try:
+        # Crucial step: Switch Telegram from Polling mode to Webhook mode
+        bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook set successfully to: {webhook_url}")
+    except Exception as e:
+        print(f"❌ Error setting webhook: {e}")
+        # Continue running Flask anyway, it might work if the URL is accessible
+
+    # 3. Start Flask server
+    print(f"🌐 Starting Flask server on port {PORT}...")
+    # NOTE: run_flask is removed, running app.run directly
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+
+def run_polling_service():
+    """Starts the Telegram bot polling loop for local development/fallback."""
+    print("\n🚀 Starting Telegram Bot Polling Service (LOCAL/FALLBACK MODE)...")
+    try:
+        # Ensure webhook is cleared before polling
+        bot.delete_webhook() 
+        print("✅ Cleared webhook. Starting polling...")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not delete webhook: {e}")
+        
+    print("     📡 Bot is now listening for messages...")
+    print("     ⏹️  Press Ctrl+C to stop\n")
+    
     while True:
         try:
-            # Added a retry mechanism directly inside the polling loop to handle transient 409s
             bot.polling(non_stop=True, interval=3)
         except telebot.apihelper.ApiTelegramException as e:
-            # Re-check the 409 conflict error (should be rare now)
+            # Handle the 409 Conflict gracefully in polling mode
             if 'terminated by other getUpdates request' in str(e):
-                print("❌ CRITICAL: 409 Conflict. Another instance is running! Waiting for 8 seconds until retry...")
+                print("❌ CRITICAL: 409 Conflict (Multiple Instances). Waiting 8 seconds until retry...")
                 time.sleep(8)
             else:
                 print(f"❌ Telegram API Error: {e}. Retrying in 5 seconds...")
                 time.sleep(5)
+        except KeyboardInterrupt:
+            break
         except Exception as e:
             print(f"❌ Fatal Polling Error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
-        except KeyboardInterrupt:
-            break
-
-# --- FLASK SERVER & BOT STARTUP ---
-
-# CRITICAL FIX: The Flask server function must be separate and simple for threading
-def run_flask():
-    """Runs Flask in a thread."""
-    PORT = int(os.environ.get("PORT", 5001))
-    print(f"🌐 Starting Flask server on port {PORT}...")
-    # NOTE: We use threaded=True for local testing, but deployment environment might ignore this
-    # The debug=False is crucial for production stability
-    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
-
-# Call setup_flask_routes here so that Flask loads all routes.
-setup_flask_routes()
 
 
 if __name__ == '__main__':
@@ -2001,19 +2017,21 @@ if __name__ == '__main__':
         print("\n🛑 Application setup incomplete. Check .env file.")
         exit(1)
 
-    # 2. HYBRID/SINGLE-SERVICE MODE (python app.py)
-    print("\n🔧 Starting Single-Service Bot (Polling + Flask Thread)...")
-    
-    # Start Flask in a separate thread for webhooks/QR page
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    time.sleep(1)
-    
-    # Run the dedicated polling function in the main thread
-    try:
+    setup_bot_environment()
+
+    # --- DEPLOYMENT LOGIC (Determined by BOT_PUBLIC_URL) ---
+    # If BOT_PUBLIC_URL is set, we assume production environment (Render/Cloud) and use webhooks.
+    if BOT_PUBLIC_URL and BOT_PUBLIC_URL.startswith('http'):
+        print("\n🌍 Starting Webhook Service (Production Mode)...")
+        set_webhook_and_run_flask()
+    else:
+        # Fallback to local polling mode
+        print("\n💻 Starting Polling Service (Local/Fallback Mode)...")
+        
+        # Start a thread to run the Flask server for QR codes and Razorpay webhooks
+        flask_thread = threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 5001, 'debug': False, 'use_reloader': False}, daemon=True)
+        flask_thread.start()
+        time.sleep(1)
+        
+        # Run polling in the main thread
         run_polling_service()
-    except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user.")
-    except Exception as e:
-        print(f"❌ Error during application startup: {e}")
-        traceback.print_exc()

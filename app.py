@@ -995,7 +995,7 @@ def handle_admin_text_commands(msg, chat_id):
 def handle_admin_callbacks(data, chat_id, message_id):
     """Processes inline buttons clicked from the Admin Dashboard."""
     # CRITICAL FIX: Add a top-level try block to match the final except below
-    try: 
+    try:
         command = data.split('_')[1]
         command_type = data.split(':')[0]
 
@@ -1536,7 +1536,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 return
 
 
-    except Exception as e: # This is the final catch-all block that was causing the SyntaxError
+    except Exception as e:
         # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")
         traceback.print_exc()
@@ -1710,6 +1710,192 @@ def start_cleanup_thread():
     cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
     cleanup_thread.start()
     print("🧹 Started background cleanup thread (runs every 5 minutes, checking for daily reset)")
+
+
+# --- TELEGRAM BOT HANDLERS (CRITICAL ADDITION) ---
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    chat_id = message.chat.id
+    student_db_id = str(chat_id) # Use chat_id as user ID in DB
+
+    if not is_bot_available_now():
+        unavailable_message(chat_id)
+        return
+
+    # Check if user is admin
+    if chat_id in ADMIN_CHAT_IDS:
+        reply_markup = get_admin_reply_keyboard()
+        welcome_msg = "Hello, Admin! Use the buttons below or send a command to manage the system."
+    else:
+        reply_markup = get_main_reply_keyboard()
+        welcome_msg = (
+            "👋 Welcome to the **Digital Canteen Bot**! I'm here to take your order.\n\n"
+            "Tap *Menu 🍽️* to see today's offerings and place an order."
+        )
+
+    # Always reset state to 'initial' on /start for non-admin users if order is not pending payment/pickup
+    order_id = db_manager.get_session_order_id(student_db_id)
+    if order_id is not None:
+        order_details = db_manager.get_order_details(order_id)
+        if order_details and order_details.get('status') in ['pending', 'cancelled']:
+            db_manager.set_session_state(student_db_id, 'initial', None)
+
+    # Initialise session/user record
+    db_manager.set_session_state(student_db_id, 'initial', None)
+    
+    bot.send_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+# Handler for the main Menu/Order Status buttons (Reply Keyboard)
+@bot.message_handler(func=lambda message: message.text in ['Menu 🍽️', 'Order Status 📊', 'Admin Panel ⚙️', 'Orders 📦'])
+def handle_reply_keyboard_buttons(message):
+    chat_id = message.chat.id
+    student_db_id = str(chat_id)
+
+    if not is_bot_available_now():
+        unavailable_message(chat_id)
+        return
+
+    text = message.text.split(' ')[0] # Extract the command part (Menu, Order, Admin, Orders)
+    
+    # --- ADMIN BUTTONS ---
+    if chat_id in ADMIN_CHAT_IDS:
+        if text == 'Admin':
+            bot.send_message(chat_id, "⚙️ **Admin Panel**\n\nSelect an action:", 
+                             parse_mode='Markdown', reply_markup=get_admin_dashboard_keyboard())
+            return
+        elif text == 'Orders':
+            bot.send_message(chat_id, "📦 **Order Management**\n\nSelect an order view:",
+                             parse_mode='Markdown', reply_markup=get_orders_dashboard_keyboard())
+            return
+
+    # --- USER BUTTONS ---
+    if text == 'Menu':
+        # Check if the user is in a state that requires a text input (e.g., typing quantity or phone number)
+        current_state = db_manager.get_session_state(student_db_id)
+        if current_state.startswith('awaiting_typed_quantity_'):
+            bot.send_message(chat_id, "⚠️ Please enter the **quantity** first, or tap 'Cancel Order ❌' on the menu to restart.")
+            return
+
+        start_menu_flow(student_db_id, chat_id)
+    
+    elif text == 'Order':
+        handle_status_check(student_db_id, chat_id)
+
+
+# Handler for Inline Keyboard button clicks
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    chat_id = call.message.chat.id
+    student_db_id = str(chat_id)
+    message_id = call.message.message_id
+    data = call.data
+
+    bot.answer_callback_query(call.id) # Acknowledge the button press instantly
+
+    # --- ADMIN/GENERAL CALLBACKS ---
+    if chat_id in ADMIN_CHAT_IDS and (data.startswith('admin_') or data.startswith('delivered:')):
+        handle_admin_callbacks(data, chat_id, message_id)
+        return
+    
+    # --- USER ORDERING CALLBACKS ---
+    handle_admin_callbacks(data, chat_id, message_id) # Reuse the unified callback handler for users
+
+
+# Handler for all text messages (used for admin commands, phone entry, and quantity entry)
+@bot.message_handler(content_types=['text'])
+def handle_text_messages(message):
+    chat_id = message.chat.id
+    student_db_id = str(chat_id)
+    text = message.text.strip()
+    
+    if not is_bot_available_now():
+        unavailable_message(chat_id)
+        return
+    
+    current_state = db_manager.get_session_state(student_db_id)
+    current_order_id = db_manager.get_session_order_id(student_db_id)
+
+    # 1. ADMIN COMMAND HANDLING (Highest Priority)
+    if chat_id in ADMIN_CHAT_IDS:
+        if text.lower() not in ['menu 🍽️', 'order status 📊', 'admin panel ⚙️', 'orders 📦']:
+            handle_admin_text_commands(text, chat_id)
+            return
+
+    # 2. PHONE NUMBER INPUT (Awaiting Phone Number State)
+    if current_state == 'awaiting_phone_number':
+        # Simple validation: ensure it contains only digits/+, and at least 7 digits
+        phone_match = re.match(r'^[+\d]{7,}$', text)
+        if not phone_match:
+            bot.send_message(chat_id, "❌ Invalid phone number format. Please enter a valid number (e.g., `+919876543210` or just `9876543210`).")
+            return
+
+        # Save the phone number
+        db_manager.update_user_phone(student_db_id, text)
+        
+        # Resume the checkout flow by calling the next logical step (confirmation)
+        # We simulate a "service:parcel" selection to trigger the confirmation message, 
+        # but since we don't have the original message_id to edit, we send a new one.
+        order_details = db_manager.get_order_details(current_order_id)
+        service_type = order_details.get('service_type', 'parcel') # Use saved service type
+        
+        # Send confirmation (cannot edit the original message from here, so send a new one)
+        # RERUN the confirmation flow.
+        
+        # Send a prompt to the user with the confirmation inline keyboard
+        items_list = db_manager.parse_order_items(order_details['items'])
+        food_summary = "\n".join([
+            f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
+            for item in items_list
+        ])
+        
+        contact_display = db_manager.get_user_phone(student_db_id)
+
+        confirmation_msg = (
+            f"📝 *Final Order Confirmation (ID: #{current_order_id}):*\n\n"
+            f"📞 **Contact:** `{contact_display}`\n"
+            f"🪑 **Service Type:** {service_type.replace('_', ' ').title()}\n"
+            f"💰 **Total Amount:** ₹{order_details['total_amount']:.2f}\n\n"
+            f"🍽️ *Items:*\n{food_summary}\n\n"
+            f"✅ Contact saved. Press **'✅ Confirm & Pay'** to proceed to Razorpay."
+        )
+        
+        db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
+
+        # Remove the Reply Keyboard before sending the new inline keyboard message
+        bot.send_message(chat_id, "✅ Contact received!", reply_markup=ReplyKeyboardRemove())
+        
+        bot.send_message(chat_id, confirmation_msg, parse_mode='Markdown', 
+                         reply_markup=get_confirmation_inline_keyboard())
+        return
+
+    # 3. TYPED QUANTITY INPUT (Awaiting Typed Quantity State)
+    elif current_state.startswith('awaiting_typed_quantity_'):
+        try:
+            quantity = int(text)
+            if quantity <= 0:
+                raise ValueError("Quantity must be positive.")
+                
+            # Extract item_id from the state string (e.g., 'awaiting_typed_quantity_123')
+            item_id = int(current_state.split('_')[-1])
+            
+            # Send initial message to remove the reply keyboard
+            bot.send_message(chat_id, f"✅ Quantity {quantity} received. Processing...", reply_markup=ReplyKeyboardRemove())
+
+            # Add item to cart and prompt for next step (message_id=None as this is a new message)
+            add_item_to_cart_and_prompt(student_db_id, chat_id, message_id=None, item_id=item_id, quantity=quantity)
+            
+        except ValueError:
+            bot.send_message(chat_id, "❌ Invalid quantity. Please type a valid whole number greater than 0.")
+        return
+
+    # 4. DEFAULT FALLBACK
+    else:
+        # Default response for unhandled text, ensuring the main keyboard is visible
+        main_keyboard = get_admin_reply_keyboard() if chat_id in ADMIN_CHAT_IDS else get_main_reply_keyboard()
+        bot.send_message(chat_id, "I'm a Canteen Bot! Please use the buttons below or type /start to begin.", 
+                         reply_markup=main_keyboard)
 
 
 # --- TELEGRAM BOT POLLING FUNCTION (CRITICALLY MODIFIED) ---

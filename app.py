@@ -523,7 +523,12 @@ def get_menu_inline_keyboard(user_id):
     if menu:
         for item in menu:
             # Use 'item:<item_id>' as callback data
-            button_text = f"{item['name'].title()} (₹{item['price']:.2f})"
+            # CRITICAL FIX: Item ID only shown to admin user (used in previous logic for menu text)
+            if user_id in ADMIN_CHAT_IDS:
+                button_text = f"ID {item['id']}: {item['name'].title()} (₹{item['price']:.2f})"
+            else:
+                button_text = f"{item['name'].title()} (₹{item['price']:.2f})"
+                
             buttons.append(InlineKeyboardButton(button_text, callback_data=f"item:{item['id']}"))
 
     # Add buttons row by row (2 per row)
@@ -599,8 +604,11 @@ def get_confirmation_inline_keyboard():
 
 # --- UTILITY FUNCTIONS ---
 
-def get_menu_text_with_sections():
-    """Formats the menu with section headers and times and returns item list."""
+def get_menu_text_with_sections(is_admin: bool):
+    """
+    Formats the menu with section headers and times. 
+    Removes item IDs for non-admin users.
+    """
     menu = db_manager.get_menu()
     
     # Organize items by section
@@ -610,7 +618,6 @@ def get_menu_text_with_sections():
         if section in items_by_section:
             items_by_section[section].append(item)
         else:
-            # Fallback for unhandled sections
             items_by_section['snacks'].append(item)
             
     menu_text = "🍽️ **Digital Canteen Menu** 📋\n\n"
@@ -624,7 +631,13 @@ def get_menu_text_with_sections():
         
         if items_by_section[section]:
             for item in items_by_section[section]:
-                 menu_text += f"    - **ID {item['id']}:** {item['name'].title()} - *₹{item['price']:.2f}*\n"
+                item_display = f"{item['name'].title()} - *₹{item['price']:.2f}*"
+                if is_admin:
+                    # Show ID for admin
+                    menu_text += f"    - **ID {item['id']}:** {item_display}\n"
+                else:
+                    # Hide ID for user
+                    menu_text += f"    - {item_display}\n"
         else:
             menu_text += "    - *No items available for this section.*\n"
         menu_text += "\n"
@@ -684,6 +697,10 @@ def send_admin_notification(order_details, verification_code):
 
         # 2. Escape the total amount string directly
         total_amount_escaped = escape_markdown(f"{order_details['total_amount']:.2f}")
+        order_id_escaped = escape_markdown(str(order_details['id']))
+        verification_code_escaped = escape_markdown(str(verification_code))
+        identifier_escaped = escape_markdown(display_identifier)
+        service_type_escaped = escape_markdown(service_type.title())
 
         # 3. Create the inline keyboard for delivery confirmation
         delivery_keyboard = InlineKeyboardMarkup(row_width=1)
@@ -693,12 +710,11 @@ def send_admin_notification(order_details, verification_code):
         # 4. Construct the notification message using MarkdownV2 syntax
         notification_msg = (
             f"🚨 \\*NEW ORDER CONFIRMED \\& PAID\\!\\* 🚨\n\n"
-            f"🆔 \\*Order ID:\\* \\#{escape_markdown(str(order_details['id']))}\n"
-            f"🔢 \\*Verification Code:\\* `{escape_markdown(str(verification_code))}`\n"
-            # FIX: Display phone number if collected, otherwise the Chat ID
-            f"📞 \\*Student Phone/ID:\\* `{escape_markdown(display_identifier)}`\n"
+            f"🆔 \\*Order ID:\\* \\#{order_id_escaped}\n"
+            f"🔢 \\*Verification Code:\\* `{verification_code_escaped}`\n"
+            f"📞 \\*Student Phone/ID:\\* `{identifier_escaped}`\n"
             f"💰 \\*Total Amount:\\* ₹{total_amount_escaped}\n"
-            f"🪑 \\*Service Type:\\* \\*{escape_markdown(service_type.title())}\\*\n\n"
+            f"🪑 \\*Service Type:\\* \\*{service_type_escaped}\\*\n\n"
             f"🍽️ \\*Ordered Items:\\*\n{food_summary}\n\n"
             f"🟢 \\*STATUS:\\* Ready for Preparation\n"
             f"📍 \\*Next Step:\\* Prepare order and press 'Order Delivered' upon pickup\\."
@@ -753,6 +769,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
         f"For Pickup\\:\n"
         f"Scan the QR code below\\.\n"
         f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n" # Escaped '(', ')', and '!'
+        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n" # ADDED MESSAGE
         f"Alternative Link\\: {link_markdown}"
     )
 
@@ -773,7 +790,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
             f"🆔 \\*Order ID\\*\\: \\#{internal_order_id}\n"
             f"🔢 \\*Verification Code\\*\\: `{verification_code}`\n\n"
             f"Show this verification code at the counter for pickup\n"
-            f"⏰ \\*Ready in\\*\\: 10\\-15 minutes\n\n" # Escaped '*' and '-'
+            f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n" # ADDED MESSAGE
             f"🔗 \\*Alternative Link\\*\\: {link_markdown}"
         )
         bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=main_keyboard)
@@ -1002,8 +1019,14 @@ def handle_admin_callbacks(data, chat_id, message_id):
     """Processes inline buttons clicked from the Admin Dashboard."""
     # CRITICAL FIX: Add a top-level try block to match the final except below
     try:
-        command = data.split('_')[1]
+        # Check if the command starts with a known prefix to skip splitting errors on simple callbacks
+        if '_' in data:
+            command = data.split('_')[1]
+        else:
+            command = data.split(':')[0]
+            
         command_type = data.split(':')[0]
+        student_db_id = str(chat_id)
 
         def edit_message(text, reply_markup=None, parse_mode='Markdown'):
             """
@@ -1029,8 +1052,9 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
 
                     # Send the dashboard keyboard separately for navigation
-                    bot.send_message(chat_id, "Please use the dashboard buttons below.",
-                                     reply_markup=get_admin_reply_keyboard())
+                    if chat_id in ADMIN_CHAT_IDS:
+                        bot.send_message(chat_id, "Please use the dashboard buttons below.",
+                                         reply_markup=get_admin_reply_keyboard())
                 except Exception as e2:
                     bot.send_message(chat_id, f"⚠️ Error. Please use text command directly.\n\n{text}", parse_mode=None)
 
@@ -1081,15 +1105,22 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
         elif command == 'menu':
             menu = db_manager.get_menu()
+            is_admin_check = chat_id in ADMIN_CHAT_IDS
+            
             if menu:
                 # MODIFIED: Use the new section-based display for the admin view
-                menu_text = get_menu_text_with_sections()
+                menu_text = get_menu_text_with_sections(is_admin=is_admin_check)
                 
-                # Also add a simple list of ID/Name for easy updating
-                simple_list = "\n\n--- Item IDs ---\n"
-                simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+                # CRITICAL: Remove item IDs section if not admin
+                if is_admin_check:
+                    simple_list = "\n\n--- Item IDs ---\n"
+                    simple_list += "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+                    menu_text += simple_list
                 
-                edit_message(menu_text + simple_list, back_to_dashboard)
+                # CRITICAL FIX: Remove 'Select an item below...' if only viewing menu.
+                # However, this button is triggered from an 'ordering' flow, so keep it focused on the start of ordering.
+                
+                edit_message(menu_text, get_menu_inline_keyboard(student_db_id))
             else:
                 edit_message("📋 The menu is currently empty.", back_to_dashboard)
             return
@@ -1163,25 +1194,34 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             archive_text = f"📄 **Archived Orders (Data up to {display_date})** ({len(archived_orders)} total)\n\n"
 
+            # CRITICAL FIX: Display full order details in a neat format
             for order in archived_orders:
                 status_emoji = {
                     'pending': '🟡', 'payment_pending': '🟠', 'paid': '🟢',
-                    'cancelled': '🔴', 'expired': '⚫', 'delivered': '🔵'
+                    'cancelled': '🔴', 'expired': '⚫', 'delivered': '🔵', 'pickup_ready': '🟢'
                 }.get(order.get('status', 'N/A'), '⚪')
 
+                # Get user contact info (assuming student_phone stores chat_id or actual phone)
+                user_contact = db_manager.get_user_phone(order.get('student_phone')) or order.get('student_phone', 'N/A')
+                
                 items_data = order.get('items', [])
-                item_summary = ", ".join([f"{item.get('name', 'Item')} x{item.get('qty', 1)}" for item in items_data])
-
-                order_id = order.get('id', 'N/A')
-                status = order.get('status', 'N/A').title()
-                total = order.get('total_amount', 0.0)
+                item_summary_lines = "\n".join([
+                    f"     • {item.get('name', 'Item').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})"
+                    for item in items_data
+                ])
 
                 archive_text += (
-                    f"{status_emoji} **Order #{order_id}** - {status} - ₹{total:.2f}\n"
-                    f"  - Items: {item_summary}\n"
+                    f"{status_emoji} \\*\\*Order \\#{order.get('id', 'N/A')}\\*\\* \\({order.get('status', 'N/A').title()}\\)\n"
+                    f"  \\- \\*Date/Time\\*\\: {order.get('created_at', 'N/A')}\n"
+                    f"  \\- \\*Contact\\*\\: `{user_contact}`\n"
+                    f"  \\- \\*Service Type\\*\\: {order.get('service_type', 'N/A').replace('_', ' ').title()}\n"
+                    f"  \\- \\*Total\\*\\: ₹{order.get('total_amount', 0.0):.2f}\n"
+                    f"  \\- \\*Verification Code\\*\\: `{order.get('pickup_code', 'N/A')}`\n"
+                    f"  \\- \\*Items\\*\\:\n{item_summary_lines}\n\n"
                 )
 
-            edit_message(archive_text, back_to_orders_dashboard)  
+            # Use MarkdownV2 for clean formatting
+            edit_message(archive_text, back_to_orders_dashboard, parse_mode='MarkdownV2')  
             return
 
         # --- NEW DELIVERY CALLBACK (Unchanged) ---
@@ -1202,7 +1242,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 ])
 
                 # Use the student_phone value directly
-                student_identifier = order_details['student_phone']
+                student_identifier = db_manager.get_user_phone(order_details['student_phone']) or order_details['student_phone']
 
                 # Use standard Markdown for the final, delivered message for simpler display
                 updated_text = (
@@ -1578,11 +1618,12 @@ def prompt_for_phone_number(student_db_id, chat_id):
 def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
     """
     Initiates the menu flow using Inline Keyboards.
-    MODIFIED: Uses the new section-based menu display.
+    MODIFIED: Uses the new section-based menu display and hides IDs for users.
     """
 
     # 1. Check for active order or create a new one
     current_order_id = db_manager.get_session_order_id(student_db_id)
+    is_admin = chat_id in ADMIN_CHAT_IDS # Determine admin status for display
 
     if current_order_id is not None:
         order_details = db_manager.get_order_details(current_order_id)
@@ -1603,10 +1644,18 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
 
     menu = db_manager.get_menu()
 
-    # MODIFIED: Get the menu text from the dedicated function
-    main_message = get_menu_text_with_sections()
+    # MODIFIED: Get the menu text from the dedicated function, passing admin status
+    main_message = get_menu_text_with_sections(is_admin=is_admin)
     if error_msg:
         main_message = f"{error_msg}\n\n" + main_message
+
+    if is_admin:
+        # Add the Item ID list explicitly for admins at the end of the menu text
+        item_list = "\n\n--- Item IDs ---\n" + "\n".join([f"ID {item['id']}: {item['name'].title()}" for item in menu])
+        main_message += item_list
+        # CRITICAL FIX: Remove 'Select an item below...' for admin menu to prevent confusing the view.
+        main_message = main_message.replace("Select an item below to begin your order.", "Use commands (add/update/delete) or select below.")
+
 
     if menu:
         if message_id:
@@ -1692,10 +1741,33 @@ def handle_status_check(student_db_id, chat_id):
                          reply_markup=get_main_reply_keyboard())
 
 
+def delete_old_qr_codes(days_old=1):
+    """Deletes all .png files in the static folder older than the specified number of days."""
+    static_dir = BASE_DIR / 'static'
+    if not static_dir.exists():
+        return
+
+    cutoff_time = datetime.now() - timedelta(days=days_old)
+    deleted_count = 0
+
+    for filepath in static_dir.glob("*.png"):
+        try:
+            # Check file modification time
+            mod_timestamp = datetime.fromtimestamp(filepath.stat().st_mtime)
+            if mod_timestamp < cutoff_time:
+                os.remove(filepath)
+                deleted_count += 1
+        except Exception as e:
+            print(f"⚠️ Error deleting old file {filepath.name}: {e}")
+
+    if deleted_count > 0:
+        print(f"🧹 Cleaned up {deleted_count} old QR code images from static folder.")
+
+
 def start_cleanup_thread():
     """
-    Start a background thread to periodically clean up expired sessions
-    and run the daily archive/reset check.
+    Start a background thread to periodically clean up expired sessions,
+    run daily archive/reset, and delete old QR codes.
     """
 
     def cleanup_worker():
@@ -1706,6 +1778,9 @@ def start_cleanup_thread():
 
                 # 2. Cleanup old sessions (e.g., sessions older than 7 days)
                 db_manager.cleanup_old_sessions(days_old=7)
+                
+                # 3. Cleanup old QR Codes
+                delete_old_qr_codes(days_old=1)
 
                 # Check every 5 minutes (300 seconds)
                 time.sleep(300)

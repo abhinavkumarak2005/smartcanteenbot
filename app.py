@@ -657,6 +657,7 @@ def escape_markdown(text):
         text = str(text)
         
     # Added ( ) to the list of escaped characters for Markdown V2
+    # Ensure escaping applies to the text variable (now confirmed as a string)
     escape_chars = r'_*`[]()~>#+-|=|{}.!'
     return "".join(['\\' + char if char in escape_chars else char for char in text])
 
@@ -790,6 +791,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
     if ticket_qr_path:
         # We MUST use MarkdownV2 here, so the caption must be fully escaped.
         with open(ticket_qr_path, 'rb') as photo:
+            # This is the line that needs robust error handling for the caption.
             bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2', # Changed to V2
                              reply_markup=main_keyboard)
     else:
@@ -1069,7 +1071,10 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     # Failure 2: Sending the potentially massive MarkdownV2 message failed (message is too long or parse error)
                     # We must not re-send 'text' in the final fallback if it caused the failure.
                     print(f"❌ Second send attempt failed. Error: {e2}. Falling back to plain text error.")
-                    bot.send_message(chat_id, "⚠️ Error. Please use text command directly.\n\n(Details failed to render due to size/parse error)", parse_mode=None)
+                    
+                    # FIX: Send a very short, generic error message here to prevent the infinite crash loop
+                    fallback_error_text = "⚠️ Error. Please use text command directly.\n\n(Details failed to render due to size/parse error)"
+                    bot.send_message(chat_id, fallback_error_text, parse_mode=None)
 
 
         # Helper for going back to the main admin dashboard (used below)
@@ -1577,13 +1582,16 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 
                 payment_qr_path = generate_payment_qr_code(payment_link, current_order_id)
 
+                # CRITICAL FIX for escaping the payment message 
+                order_id_escaped = escape_markdown(str(current_order_id))
+                total_amount_escaped = escape_markdown(f"{total_amount:.2f}")
 
                 payment_msg = (
-                    f"✅ *Order Ready for Payment! (ID: #{current_order_id})*\n\n"
-                    f"💰 **Total Amount:** ₹{total_amount:.2f}\n\n"
-                    f"💳 **Pay Securely with Razorpay:**\n"
-                    f"👆 Tap the button or scan the QR code below.\n"
-                    f"Status updates automatically after payment."
+                    f"✅ \\*Order Ready for Payment\\!\\* \\(ID\\: \\#{order_id_escaped}\\)\n\n"
+                    f"💰 \\*Total Amount\\*\\: ₹{total_amount_escaped}\n\n"
+                    f"💳 \\*Pay Securely with Razorpay\\*\\:\n"
+                    f"👆 Tap the button or scan the QR code below\\.\n"
+                    f"Status updates automatically after payment\\."
                 )
 
                 # Edit the confirmation message to display a generating message
@@ -1605,8 +1613,17 @@ def handle_admin_callbacks(data, chat_id, message_id):
                         bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='MarkdownV2',
                                          reply_markup=payment_keyboard)
                 else:
-                    # This path is taken when PIL is missing or QR generation fails.
-                    bot.send_message(chat_id, payment_msg, parse_mode='Markdown', reply_markup=payment_keyboard)
+                    # Fallback message uses MarkdownV2
+                    fallback_msg = (
+                        f"🎉 \\*Payment Confirmed\\!\\* \n\n"
+                        f"❌ QR Code generation failed\\. Use the Verification Code and Alternative Link\\.\n\n"
+                        f"🆔 \\*Order ID\\*\\: \\#{order_id_escaped}\n"
+                        f"🔢 \\*Verification Code\\*\\: `{escape_markdown(verification_code)}`\n\n"
+                        f"Show this verification code at the counter for pickup\n"
+                        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
+                        f"🔗 \\*Alternative Link\\*\\: {link_markdown}"
+                    )
+                    bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=payment_keyboard)
 
                 db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
                 return

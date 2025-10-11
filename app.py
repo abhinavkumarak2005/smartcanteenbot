@@ -1111,15 +1111,28 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 # MODIFIED: Use the new section-based display for the admin view
                 menu_text = get_menu_text_with_sections(is_admin=is_admin_check)
                 
-                # CRITICAL FIX: Remove the generic ordering prompt for admin menu view.
+                # CRITICAL FIX: Only runs for admin view
                 if is_admin_check:
-                    # Only runs for admin view
+                    # Remove the generic ordering prompt 
                     menu_text = menu_text.replace("Select an item below to begin your order.", "Use commands (add/update/delete) or select below.")
+                    
+                    # Instead of using the redundant inline buttons for menu items, we only want the Back to Dashboard option
+                    # We pass None as reply_markup and send the Back to Dashboard button separately 
+                    # as a courtesy or part of another inline keyboard flow if needed, but for 'admin_menu' we just show the text.
+                    edit_message(menu_text, back_to_dashboard) # Use the minimal back button
+                    return
                 
-                edit_message(menu_text, get_menu_inline_keyboard(student_db_id))
-            else:
+                # Non-admin users fall through to the ordering logic below (which is why they see the buttons)
+
+            # Non-admin user action: start/edit order (or if admin but menu is empty)
+            if not menu:
                 edit_message("📋 The menu is currently empty.", back_to_dashboard)
+                return
+
+            # Non-admin flow for 'View Menu' which is actually the start of an order
+            edit_message(menu_text, get_menu_inline_keyboard(student_db_id))
             return
+
 
         elif command == 'stats':
             stats = db_manager.get_order_statistics()

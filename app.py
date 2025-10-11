@@ -1116,10 +1116,8 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     # Remove the generic ordering prompt 
                     menu_text = menu_text.replace("Select an item below to begin your order.", "Use commands (add/update/delete) or select below.")
                     
-                    # Instead of using the redundant inline buttons for menu items, we only want the Back to Dashboard option
-                    # We pass None as reply_markup and send the Back to Dashboard button separately 
-                    # as a courtesy or part of another inline keyboard flow if needed, but for 'admin_menu' we just show the text.
-                    edit_message(menu_text, back_to_dashboard) # Use the minimal back button
+                    # Edit the message to show only the menu text and the back button. NO ORDER BUTTONS.
+                    edit_message(menu_text, back_to_dashboard) 
                     return
                 
                 # Non-admin users fall through to the ordering logic below (which is why they see the buttons)
@@ -1215,7 +1213,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 
                 items_data = order.get('items', [])
                 item_summary_lines = "\n".join([
-                    f"     • {item.get('name', 'Item').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})"
+                    f"     • {escape_markdown(item.get('name', 'Item').title())} x {item.get('qty', 1)} \\(₹{item.get('price', 0.0):.2f}\\)"
                     for item in items_data
                 ])
                 

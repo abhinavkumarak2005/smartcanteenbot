@@ -647,7 +647,15 @@ def get_menu_text_with_sections(is_admin: bool):
 
 
 def escape_markdown(text):
-    """Escapes special characters in text for Telegram Markdown V2."""
+    """
+    Escapes special characters in text for Telegram Markdown V2.
+    CRITICAL FIX: Ensure input is always a string.
+    """
+    if text is None:
+        text = "N/A"
+    else:
+        text = str(text)
+        
     escape_chars = r'_*`[]()~>#+-|=|{}.!'
     return "".join(['\\' + char if char in escape_chars else char for char in text])
 
@@ -1225,13 +1233,16 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 service_type_formatted = str(raw_service_type).replace('_', ' ').title()
 
                 # Escape all dynamic data fields
-                order_id_escaped = escape_markdown(str(order.get('id', 'N/A')))
+                order_id_escaped = escape_markdown(order.get('id', 'N/A'))
                 status_escaped = escape_markdown(order.get('status', 'N/A').title())
                 created_at_escaped = escape_markdown(order.get('created_at', 'N/A'))
                 contact_escaped = escape_markdown(user_contact)
                 service_type_escaped = escape_markdown(service_type_formatted)
                 total_amount_escaped = escape_markdown(f"{order.get('total_amount', 0.0):.2f}")
-                pickup_code_escaped = escape_markdown(order.get('pickup_code', 'N/A'))
+                
+                # CRITICAL FIX for NoneType: order.get('pickup_code', 'N/A') returns 'N/A' if missing, 
+                # but if the value in the archive is NULL/None, it returns None.
+                pickup_code_escaped = escape_markdown(order.get('pickup_code'))
 
 
                 archive_text += (
@@ -1587,7 +1598,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 # Send the final payment message (new message to ensure delivery)
                 if payment_qr_path:
                     with open(payment_qr_path, 'rb') as photo:
-                        bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='Markdown',
+                        bot.send_photo(chat_id, photo, caption=payment_msg, parse_mode='MarkdownV2',
                                          reply_markup=payment_keyboard)
                 else:
                     # This path is taken when PIL is missing or QR generation fails.
@@ -1610,11 +1621,15 @@ def handle_admin_callbacks(data, chat_id, message_id):
         # We catch all other errors here and handle them as a fallback.
         print(f"❌ Error handling callback query: {e}")
         traceback.print_exc()
+        
+        # FIX: Check if admin and send correct keyboard
+        is_admin = chat_id in ADMIN_CHAT_IDS
+        fallback_keyboard = get_admin_reply_keyboard() if is_admin else get_main_reply_keyboard()
+        
         # Fallback: Send a message to restart the flow
         try:
-            # Send the generic error message you saw in the screenshot
             error_message = "❌ An internal error occurred! Please tap 'Menu 🍽️' to restart the flow."
-            bot.send_message(chat_id, error_message, reply_markup=get_main_reply_keyboard())
+            bot.send_message(chat_id, error_message, reply_markup=fallback_keyboard)
         except Exception:
             pass
 
@@ -1683,6 +1698,23 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
     if menu:
         if message_id:
             try:
+                # If admin is just viewing the menu, remove the ordering buttons
+                reply_markup = get_menu_inline_keyboard(student_db_id)
+                if is_admin and message_id:
+                     # If triggered from the Admin Panel, we don't need the ordering buttons, 
+                     # but we keep the 'Cancel Order' button because it's part of the standard menu KB setup.
+                     # However, to explicitly remove all buttons and only show the Back to Dashboard, 
+                     # we need to adjust the logic based on *how* the admin got here.
+                    
+                    # For simplicity and correctness with the existing structure:
+                    # Admin starts menu flow -> Show full menu text + normal item buttons
+                    # If the admin used 'admin_menu' callback (handled in handle_admin_callbacks), the buttons are removed there.
+
+                    # Let's check if the admin pressed the main reply keyboard button 'Menu 🍽️'
+                    if not message_id: 
+                        # This path is taken by the initial /start or Menu button press (non-callback)
+                        pass
+                    
                 bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=message_id,

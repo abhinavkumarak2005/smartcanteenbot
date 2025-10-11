@@ -1052,21 +1052,25 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     reply_markup=reply_markup
                 )
             except telebot.apihelper.ApiTelegramException as e:
+                # Failure 1: Edit failed (e.g., due to parsing or 'not modified')
                 if "message is not modified" in str(e) or "message can't be edited" in str(e):
                     return
 
-                # Fallback: Send the message as a new one
+                # Fallback 1: Try sending the same message as a new message (in case the old one is non-editable)
                 print(f"⚠️ Edit failed for {command}. Sending new message. Error: {e}")
                 try:
-                    # Send a new message with the content and the correct inline buttons
                     bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
 
                     # Send the dashboard keyboard separately for navigation
                     if chat_id in ADMIN_CHAT_IDS:
                         bot.send_message(chat_id, "Please use the dashboard buttons below.",
                                          reply_markup=get_admin_reply_keyboard())
-                except Exception as e2:
-                    bot.send_message(chat_id, f"⚠️ Error. Please use text command directly.\n\n{text}", parse_mode=None)
+                except telebot.apihelper.ApiTelegramException as e2:
+                    # Failure 2: Sending the potentially massive MarkdownV2 message failed (message is too long or parse error)
+                    # We must not re-send 'text' in the final fallback if it caused the failure.
+                    print(f"❌ Second send attempt failed. Error: {e2}. Falling back to plain text error.")
+                    bot.send_message(chat_id, "⚠️ Error. Please use text command directly.\n\n(Details failed to render due to size/parse error)", parse_mode=None)
+
 
         # Helper for going back to the main admin dashboard (used below)
         back_to_dashboard = InlineKeyboardMarkup().row(
@@ -1241,8 +1245,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 service_type_escaped = escape_markdown(service_type_formatted)
                 total_amount_escaped = escape_markdown(f"{order.get('total_amount', 0.0):.2f}")
                 
-                # CRITICAL FIX for NoneType: order.get('pickup_code') returns None if NULL in DB.
-                # escape_markdown now handles the conversion to string.
+                # CRITICAL FIX: escape_markdown is robust now, pass value directly.
                 pickup_code_escaped = escape_markdown(order.get('pickup_code'))
 
 
@@ -1630,9 +1633,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
         # Fallback: Send a message to restart the flow
         try:
             error_message = "❌ An internal error occurred! Please tap 'Menu 🍽️' to restart the flow."
-            # The fallback message itself might need escaping if it contains dynamic data, but here it's static.
-            # However, the subsequent attempts to send the full, long 'archive_text' are what lead to the length error.
-            # We must ensure we ONLY send a short error message here.
+            # We ONLY send a short error message here to prevent the "message is too long" error cascade.
             bot.send_message(chat_id, error_message, reply_markup=fallback_keyboard)
         except Exception:
             pass

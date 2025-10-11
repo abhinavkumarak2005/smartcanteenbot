@@ -1180,9 +1180,10 @@ def handle_admin_callbacks(data, chat_id, message_id):
             return
 
 
-        # --- DISPLAY SPECIFIC ARCHIVE FILE (Triggered by inline button from /archive text command) ---
+        # --- DISPLAY SPECIFIC ARCHIVE FILE (FIXED) ---
         elif command_type == 'archive_view_file':
             filename = data.split(':')[1]
+            # Archived orders might be a list of dictionaries if successful, or None/empty list on error.
             archived_orders = db_manager.get_archived_orders_by_filename(filename)
 
             if not archived_orders:
@@ -1192,7 +1193,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             date_part = filename.replace('orders_archived_before_', '').replace('.json', '')
             try:
-                # FIX: Calculate the date the data was created (one day before cutoff date)
                 cutoff_date = datetime.strptime(date_part, '%Y-%m-%d')
                 data_date = cutoff_date - timedelta(days=1)
                 display_date = data_date.strftime('%d %b %Y')
@@ -1201,7 +1201,6 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
             archive_text = f"📄 **Archived Orders (Data up to {display_date})** ({len(archived_orders)} total)\n\n"
 
-            # CRITICAL FIX: Display full order details in a neat format
             for order in archived_orders:
                 status_emoji = {
                     'pending': '🟡', 'payment_pending': '🟠', 'paid': '🟢',
@@ -1212,17 +1211,25 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 user_contact = db_manager.get_user_phone(order.get('student_phone')) or order.get('student_phone', 'N/A')
                 
                 items_data = order.get('items', [])
+                
+                # Build and escape item summary
                 item_summary_lines = "\n".join([
+                    # Escape the item name, ensuring the final output is safe MarkdownV2
                     f"     • {escape_markdown(item.get('name', 'Item').title())} x {item.get('qty', 1)} \\(₹{item.get('price', 0.0):.2f}\\)"
                     for item in items_data
                 ])
                 
-                # Escape necessary fields for MarkdownV2
+                # Retrieve value, ensure it's a string, then perform formatting and escaping.
+                # FIX: Explicitly cast to str() before chaining .replace().title()
+                raw_service_type = order.get('service_type', 'N/A')
+                service_type_formatted = str(raw_service_type).replace('_', ' ').title()
+
+                # Escape all dynamic data fields
                 order_id_escaped = escape_markdown(str(order.get('id', 'N/A')))
                 status_escaped = escape_markdown(order.get('status', 'N/A').title())
                 created_at_escaped = escape_markdown(order.get('created_at', 'N/A'))
                 contact_escaped = escape_markdown(user_contact)
-                service_type_escaped = escape_markdown(order.get('service_type', 'N/A').replace('_', ' ').title())
+                service_type_escaped = escape_markdown(service_type_formatted)
                 total_amount_escaped = escape_markdown(f"{order.get('total_amount', 0.0):.2f}")
                 pickup_code_escaped = escape_markdown(order.get('pickup_code', 'N/A'))
 

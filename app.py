@@ -92,20 +92,6 @@ def is_bot_available_now() -> bool:
     # CRITICAL FIX: Always return True to disable the time limit for now
     return True
     
-    # Original logic (kept commented out for future reference)
-    # try:
-    #     now_utc = datetime.now(timezone.utc)
-    #     now_ist = now_utc.astimezone(IST)
-    #     current_hour = now_ist.hour
-    #     current_minute = now_ist.minute
-    #     current_minutes = current_hour * 60 + current_minute
-    #     start_minutes = OPERATING_START_HOUR * 60
-    #     end_minutes = OPERATING_END_HOUR * 60
-    #     return start_minutes <= current_minutes < end_minutes
-    # except Exception as e:
-    #     print(f"❌ Error in is_bot_available_now: {e}")
-    #     return False 
-
 def unavailable_message(chat_id):
     """Sends the standard unavailability message."""
     # MODIFIED MESSAGE
@@ -116,6 +102,12 @@ def unavailable_message(chat_id):
 def setup_flask_routes():
     """Registers all necessary Flask routes to prevent AssertionError."""
     # NOTE: This is called on script load and before main execution.
+
+    # FIX 1: Add a root route handler to prevent 404 on the base URL health check
+    @app.route('/', methods=['GET'])
+    def root():
+        """Simple health check/root page to prevent 404 on the base URL."""
+        return "Telegram Canteen Bot is running.", 200
 
     @app.route('/order_success', methods=['GET'])
     def order_success():
@@ -158,6 +150,7 @@ def setup_flask_routes():
         """
         return html_content
 
+    # FIX 2: Ensure the Razorpay Webhook path is correctly registered
     @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
@@ -357,6 +350,7 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
+            # FIX: Ensure callback_url uses the direct path
             "callback_url": f"{BOT_PUBLIC_URL}/order_success",  # Redirects here after payment
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
@@ -656,7 +650,7 @@ def escape_markdown(text):
         
     # Added ( ) to the list of escaped characters for Markdown V2
     # NOTE: The list is simplified and includes all characters reserved by MarkdownV2
-    escape_chars = r'_*`[]()~>#+-|=.!' 
+    escape_chars = r'_*`[]()~>#+-|=.!'
     return "".join(['\\' + char if char in escape_chars else char for char in text])
 
 
@@ -772,14 +766,14 @@ def handle_successful_payment(internal_order_id, student_db_id):
     # The parts below must now contain fully escaped text or explicit Markdown V2 formatting
     # NOTE: The constant parts are escaped for V2
     pickup_msg = (
-        f"🎉 Payment Confirmed\\! \\(Order ID\\: \\#{internal_order_id}\\)\n\n"
+        f"🎉 Payment Confirmed\\! \\(Order ID\\: \\#{internal_order_id}\\)\n\n" # Escaped '!' and '('
         f"Here is your Order QR Code for pickup\\!\n\n"
         f"Verification Code\\: *{escape_markdown(verification_code)}*\n"
         f"Service Type\\: {escape_markdown(service_type.title())}\n\n"
         f"For Pickup\\:\n"
         f"Scan the QR code below\\.\n"
-        f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n"
-        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
+        f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n" # Escaped '(', ')', and '!'
+        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n" # ADDED MESSAGE
         f"Alternative Link\\: {link_markdown}"
     )
 
@@ -804,6 +798,9 @@ def handle_successful_payment(internal_order_id, student_db_id):
             f"🔗 \\*Alternative Link\\*\\: {link_markdown}"
         )
         bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=main_keyboard)
+
+    db_manager.set_session_state(student_db_id, 'waiting_for_payment', current_order_id)
+    return
 
 
 def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, quantity):
@@ -2018,16 +2015,21 @@ def handle_text_messages(message):
             f"🪑 **Service Type:** {service_type.replace('_', ' ').title()}\n"
             f"💰 **Total Amount:** ₹{order_details['total_amount']:.2f}\n\n"
             f"🍽️ *Items:*\n{food_summary}\n\n"
-            f"✅ Contact saved. Press **'✅ Confirm & Pay'** to proceed to Razorpay."
+            f"Press **'✅ Confirm & Pay'** to proceed to Razorpay."
         )
-        
-        db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
 
-        # Remove the Reply Keyboard before sending the new inline keyboard message
-        bot.send_message(chat_id, "✅ Contact received!", reply_markup=ReplyKeyboardRemove())
-        
-        bot.send_message(chat_id, confirmation_msg, parse_mode='Markdown', 
-                         reply_markup=get_confirmation_inline_keyboard())
+        db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
+        try:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=confirmation_msg,
+                parse_mode='Markdown',
+                reply_markup=get_confirmation_inline_keyboard()
+            )
+        except telebot.apihelper.ApiTelegramException as e:
+            if "message is not modified" not in str(e):
+                raise
         return
 
     # 4. TYPED QUANTITY INPUT (Awaiting Typed Quantity State)

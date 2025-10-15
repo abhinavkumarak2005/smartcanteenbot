@@ -150,7 +150,6 @@ def setup_flask_routes():
         """
         return html_content
 
-    # FIX 2: Ensure the Razorpay Webhook path is correctly registered
     @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
@@ -2098,6 +2097,7 @@ def webhook():
 
 def set_webhook_and_run_flask():
     """Sets the webhook and starts the Flask server."""
+    # FIX: Read PORT from environment variable (Render standard)
     PORT = int(os.environ.get("PORT", 5001))
 
     # 1. Construct the webhook URL

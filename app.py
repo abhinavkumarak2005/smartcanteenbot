@@ -791,7 +791,6 @@ def handle_successful_payment(internal_order_id, student_db_id):
     if ticket_qr_path:
         # We MUST use MarkdownV2 here, so the caption must be fully escaped.
         with open(ticket_qr_path, 'rb') as photo:
-            # This is the line that needs robust error handling for the caption.
             bot.send_photo(student_db_id, photo, caption=pickup_msg, parse_mode='MarkdownV2', # Changed to V2
                              reply_markup=main_keyboard)
     else:
@@ -1586,6 +1585,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                 order_id_escaped = escape_markdown(str(current_order_id))
                 total_amount_escaped = escape_markdown(f"{total_amount:.2f}")
 
+                # The "!" is now correctly escaped in the constant string.
                 payment_msg = (
                     f"✅ \\*Order Ready for Payment\\!\\* \\(ID\\: \\#{order_id_escaped}\\)\n\n"
                     f"💰 \\*Total Amount\\*\\: ₹{total_amount_escaped}\n\n"

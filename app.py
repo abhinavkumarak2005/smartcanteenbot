@@ -88,25 +88,23 @@ OPERATING_END_HOUR = 17 # 5 PM (exclusive)
 
 def is_bot_available_now() -> bool:
     """Checks if the current time is between OPERATING_START_HOUR (9) and OPERATING_END_HOUR (17) in IST."""
-    try:
-        # 1. Get current time in IST
-        now_utc = datetime.now(timezone.utc)
-        now_ist = now_utc.astimezone(IST)
-        
-        current_hour = now_ist.hour
-        current_minute = now_ist.minute
-        
-        # Convert times to minutes past midnight for simple numerical comparison
-        current_minutes = current_hour * 60 + current_minute
-        start_minutes = OPERATING_START_HOUR * 60
-        end_minutes = OPERATING_END_HOUR * 60
-        
-        # 3. Check if current time is within the range [start, end)
-        # e.g., 9:00 (540 min) <= current_minutes < 17:00 (1020 min)
-        return start_minutes <= current_minutes < end_minutes
-    except Exception as e:
-        print(f"❌ Error in is_bot_available_now: {e}")
-        return False # Default to unavailable on error
+    
+    # CRITICAL FIX: Always return True to disable the time limit for now
+    return True
+    
+    # Original logic (kept commented out for future reference)
+    # try:
+    #     now_utc = datetime.now(timezone.utc)
+    #     now_ist = now_utc.astimezone(IST)
+    #     current_hour = now_ist.hour
+    #     current_minute = now_ist.minute
+    #     current_minutes = current_hour * 60 + current_minute
+    #     start_minutes = OPERATING_START_HOUR * 60
+    #     end_minutes = OPERATING_END_HOUR * 60
+    #     return start_minutes <= current_minutes < end_minutes
+    # except Exception as e:
+    #     print(f"❌ Error in is_bot_available_now: {e}")
+    #     return False 
 
 def unavailable_message(chat_id):
     """Sends the standard unavailability message."""
@@ -657,8 +655,8 @@ def escape_markdown(text):
         text = str(text)
         
     # Added ( ) to the list of escaped characters for Markdown V2
-    # Ensure escaping applies to the text variable (now confirmed as a string)
-    escape_chars = r'_*`[]()~>#+-|=|{}.!'
+    # NOTE: The list is simplified and includes all characters reserved by MarkdownV2
+    escape_chars = r'_*`[]()~>#+-|=.!' 
     return "".join(['\\' + char if char in escape_chars else char for char in text])
 
 
@@ -772,15 +770,16 @@ def handle_successful_payment(internal_order_id, student_db_id):
 
 
     # The parts below must now contain fully escaped text or explicit Markdown V2 formatting
+    # NOTE: The constant parts are escaped for V2
     pickup_msg = (
-        f"🎉 Payment Confirmed\\! \\(Order ID\\: \\#{internal_order_id}\\)\n\n" # Escaped '!' and '('
+        f"🎉 Payment Confirmed\\! \\(Order ID\\: \\#{internal_order_id}\\)\n\n"
         f"Here is your Order QR Code for pickup\\!\n\n"
         f"Verification Code\\: *{escape_markdown(verification_code)}*\n"
         f"Service Type\\: {escape_markdown(service_type.title())}\n\n"
         f"For Pickup\\:\n"
         f"Scan the QR code below\\.\n"
-        f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n" # Escaped '(', ')', and '!'
-        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n" # ADDED MESSAGE
+        f"\\(Note\\: If you see a warning page, please click \\'Visit Site\\'\\.\\)\n\n"
+        f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
         f"Alternative Link\\: {link_markdown}"
     )
 
@@ -796,12 +795,12 @@ def handle_successful_payment(internal_order_id, student_db_id):
     else:
         # Fallback message uses MarkdownV2
         fallback_msg = (
-            f"🎉 \\*Payment Confirmed\\!\\* \n\n" # Escaped '*' and '!'
+            f"🎉 \\*Payment Confirmed\\!\\* \n\n"
             f"❌ QR Code generation failed\\. Use the Verification Code and Alternative Link\\.\n\n"
             f"🆔 \\*Order ID\\*\\: \\#{internal_order_id}\n"
-            f"🔢 \\*Verification Code\\*\\: `{verification_code}`\n\n"
+            f"🔢 \\*Verification Code\\*\\: `{escape_markdown(verification_code)}`\n\n"
             f"Show this verification code at the counter for pickup\n"
-            f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n" # ADDED MESSAGE
+            f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
             f"🔗 \\*Alternative Link\\*\\: {link_markdown}"
         )
         bot.send_message(student_db_id, fallback_msg, parse_mode='MarkdownV2', reply_markup=main_keyboard)

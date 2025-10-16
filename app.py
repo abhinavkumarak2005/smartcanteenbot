@@ -109,7 +109,7 @@ def setup_flask_routes():
         """Simple health check/root page to prevent 404 on the base URL."""
         return "Telegram Canteen Bot is running.", 200
 
-    @app.route('/order_success', methods=['GET'])
+    @app.route(f'/{TOKEN}/order_success', methods=['GET'])
     def order_success():
         """Endpoint for Razorpay redirect after successful payment (browser view)."""
         html_content = """
@@ -150,7 +150,7 @@ def setup_flask_routes():
         """
         return html_content
 
-    @app.route('/razorpay/webhook', methods=['POST'])
+    @app.route(f'/{TOKEN}/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
         print("🚨 Webhook received from Razorpay.")
@@ -349,8 +349,8 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Ensure callback_url uses the direct path
-            "callback_url": f"{BOT_PUBLIC_URL}/order_success",  # Redirects here after payment
+            # FIX: Ensure callback_url uses the tokenized path
+            "callback_url": f"{BOT_PUBLIC_URL}/{TOKEN}/order_success",  # Redirects here after payment
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
         }

@@ -349,7 +349,7 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Ensure callback_url uses the tokenized path
+            # FIX: Ensure callback_url uses the tokenized path for correct Render routing
             "callback_url": f"{BOT_PUBLIC_URL}/{TOKEN}/order_success",  # Redirects here after payment
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity

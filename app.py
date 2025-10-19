@@ -16,12 +16,14 @@ import traceback
 import logging
 import razorpay
 import re
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_from_directory
 import requests # Ensure requests is imported for exception handling
 
 # --- PROJECT CONFIGURATION & ROBUST .ENV LOADING ---
 BASE_DIR = Path(__file__).resolve().parent
 DOTENV_PATH = BASE_DIR / '.env'
+STATIC_DIR = BASE_DIR / 'static'
+STATIC_DIR.mkdir(exist_ok=True) # Ensure static directory exists
 
 # Load environment variables using the explicit path
 load_dotenv(dotenv_path=DOTENV_PATH)
@@ -108,6 +110,13 @@ def setup_flask_routes():
     def root():
         """Simple health check/root page to prevent 404 on the base URL."""
         return "Telegram Canteen Bot is running.", 200
+        
+    # FIX: Add a route to serve the static QR code images
+    @app.route('/static/<path:filename>')
+    def static_files(filename):
+        """Serves static files (QR codes)."""
+        return send_from_directory(STATIC_DIR, filename)
+
 
     @app.route('/order_success', methods=['GET'])
     def order_success():

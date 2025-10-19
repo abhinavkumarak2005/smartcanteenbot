@@ -109,7 +109,8 @@ def setup_flask_routes():
         """Simple health check/root page to prevent 404 on the base URL."""
         return "Telegram Canteen Bot is running.", 200
 
-    @app.route(f'/{TOKEN}/order_success', methods=['GET'])
+    # FIX 2: Reverting to standard non-tokenized path
+    @app.route('/order_success', methods=['GET'])
     def order_success():
         """Endpoint for Razorpay redirect after successful payment (browser view)."""
         html_content = """
@@ -150,7 +151,8 @@ def setup_flask_routes():
         """
         return html_content
 
-    @app.route(f'/{TOKEN}/razorpay/webhook', methods=['POST'])
+    # FIX 3: Reverting to standard non-tokenized path
+    @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
         print("🚨 Webhook received from Razorpay.")
@@ -349,8 +351,8 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Ensure callback_url uses the tokenized path for correct Render routing
-            "callback_url": f"{BOT_PUBLIC_URL}/{TOKEN}/order_success",  # Redirects here after payment
+            # FIX: Reverting to standard path for Razorpay. The external service MUST be configured without the token prefix.
+            "callback_url": f"{BOT_PUBLIC_URL}/order_success",  
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
         }
@@ -523,7 +525,7 @@ def get_menu_inline_keyboard(user_id):
             buttons.append(InlineKeyboardButton(button_text, callback_data=f"item:{item['id']}"))
 
     # Add buttons row by row (2 per row)
-    for i in range(0, len(buttons), 2):
+    for i in range(0=, len(buttons), 2):
         row = buttons[i:i + 2]
         markup.row(*row)
 

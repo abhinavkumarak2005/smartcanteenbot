@@ -109,8 +109,8 @@ def setup_flask_routes():
         """Simple health check/root page to prevent 404 on the base URL."""
         return "Telegram Canteen Bot is running.", 200
 
-    # FIX 2: Using standard, non-tokenized path for Razorpay redirect
-    @app.route('/order_success', methods=['GET'])
+    # FIX 2: Using tokenized path for Razorpay redirect (MUST UPDATE DASHBOARD)
+    @app.route(f'/{TOKEN}/order_success', methods=['GET'])
     def order_success():
         """Endpoint for Razorpay redirect after successful payment (browser view)."""
         html_content = """
@@ -151,8 +151,8 @@ def setup_flask_routes():
         """
         return html_content
 
-    # FIX 3: Using standard, non-tokenized path for Razorpay Webhook
-    @app.route('/razorpay/webhook', methods=['POST'])
+    # FIX 3: Using tokenized path for Razorpay Webhook (MUST UPDATE DASHBOARD)
+    @app.route(f'/{TOKEN}/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
         print("🚨 Webhook received from Razorpay.")
@@ -351,7 +351,7 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Using standard path for Razorpay. The external service MUST be configured without the token prefix.
+            # FIX: Using standard path for Razorpay. 
             "callback_url": f"{BOT_PUBLIC_URL}/order_success",  
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
@@ -1614,7 +1614,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     fallback_msg = (
                         f"🎉 \\*Payment Confirmed\\!\\* \n\n"
                         f"❌ QR Code generation failed\\. Use the Verification Code and Alternative Link\\.\n\n"
-                        f"🆔 \\*Order ID\\*\\: \\#{internal_order_id}\n"
+                        f"🆔 \\*Order ID\\*\\: \\#{order_id_escaped}\n"
                         f"🔢 \\*Verification Code\\*\\: `{escape_markdown(verification_code)}`\n\n"
                         f"Show this verification code at the counter for pickup\n"
                         f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
@@ -2001,11 +2001,11 @@ def handle_text_messages(message):
         # --- CRITICAL FIX: Proceed to confirmation ---
         
         # 1. Immediately remove the reply keyboard after successful input
+        # Note: message.message_id refers to the user's typed message ID, which cannot be edited.
         bot.send_message(chat_id, "✅ Contact received! Proceeding to final confirmation...", reply_markup=ReplyKeyboardRemove())
 
         # 2. Trigger the next step (confirm_pay logic must handle this without a message_id to edit)
-        # Note: We must pass a message_id (even if None) to satisfy handle_admin_callbacks structure,
-        # but in this state, we know we need to send a *new* message.
+        # We pass None for message_id since we must send a new message for final confirmation.
         handle_admin_callbacks('confirm_pay', chat_id, message_id=None)
         return 
     # END OF AWAITING_PHONE_NUMBER STATE

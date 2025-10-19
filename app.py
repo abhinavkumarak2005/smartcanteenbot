@@ -349,7 +349,7 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Using standard path for Razorpay, ensure your Razorpay dashboard links are NOT tokenized.
+            # FIX: Using standard path for Razorpay. The external service MUST be configured without the token prefix.
             "callback_url": f"{BOT_PUBLIC_URL}/order_success",  
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
@@ -1989,47 +1989,24 @@ def handle_text_messages(message):
         # Simple validation: ensure it contains only digits/+, and at least 7 digits
         phone_match = re.match(r'^[+\d]{7,}$', text)
         if not phone_match:
+            # Re-send prompt if input is invalid
             bot.send_message(chat_id, "❌ Invalid phone number format. Please enter a valid number (e.g., `+919876543210` or just `9876543210`).")
             return
 
-        # Save the phone number
+        # Contact is valid, save it
         db_manager.update_user_phone(student_db_id, text)
         
-        # Resume the checkout flow 
-        order_details = db_manager.get_order_details(current_order_id)
-        service_type = order_details.get('service_type', 'parcel') # Use saved service type
+        # --- CRITICAL FIX: Proceed to confirmation ---
+        # The user's typed message (the phone number) has no message_id to edit,
+        # so we trigger the flow to send a brand new confirmation message.
         
-        # Send a prompt to the user with the confirmation inline keyboard
-        items_list = db_manager.parse_order_items(order_details['items'])
-        food_summary = "\n".join([
-            f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})"
-            for item in items_list
-        ])
-        
-        contact_display = db_manager.get_user_phone(student_db_id)
+        # 1. Immediately remove the reply keyboard after successful input
+        bot.send_message(chat_id, "✅ Contact received! Proceeding to final confirmation...", reply_markup=ReplyKeyboardRemove())
 
-        confirmation_msg = (
-            f"📝 *Final Order Confirmation (ID: #{current_order_id}):*\n\n"
-            f"📞 **Contact:** `{contact_display}`\n"
-            f"🪑 **Service Type:** {service_type.replace('_', ' ').title()}\n"
-            f"💰 **Total Amount:** ₹{order_details['total_amount']:.2f}\n\n"
-            f"🍽️ *Items:*\n{food_summary}\n\n"
-            f"Press **'✅ Confirm & Pay'** to proceed to Razorpay."
-        )
-
-        db_manager.set_session_state(student_db_id, 'confirming_order', current_order_id)
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=confirmation_msg,
-                parse_mode='Markdown',
-                reply_markup=get_confirmation_inline_keyboard()
-            )
-        except telebot.apihelper.ApiTelegramException as e:
-            if "message is not modified" not in str(e):
-                raise
-        return
+        # 2. Trigger the next step (confirm_pay logic must handle this without a message_id to edit)
+        handle_admin_callbacks('confirm_pay', chat_id, message_id=None)
+        return 
+    # END OF AWAITING_PHONE_NUMBER STATE
 
     # 4. TYPED QUANTITY INPUT (Awaiting Typed Quantity State)
     elif current_state.startswith('awaiting_typed_quantity_'):

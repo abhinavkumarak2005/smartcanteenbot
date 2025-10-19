@@ -1958,7 +1958,6 @@ def handle_text_messages(message):
     chat_id = message.chat.id
     student_db_id = str(chat_id)
     text = message.text.strip()
-    message_id = message.message_id # Get the ID of the user's incoming message
     
     is_admin = chat_id in ADMIN_CHAT_IDS
 

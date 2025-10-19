@@ -109,8 +109,7 @@ def setup_flask_routes():
         """Simple health check/root page to prevent 404 on the base URL."""
         return "Telegram Canteen Bot is running.", 200
 
-    # FIX 2: Using tokenized path for Razorpay redirect (MUST UPDATE DASHBOARD)
-    @app.route(f'/{TOKEN}/order_success', methods=['GET'])
+    @app.route('/order_success', methods=['GET'])
     def order_success():
         """Endpoint for Razorpay redirect after successful payment (browser view)."""
         html_content = """
@@ -151,8 +150,7 @@ def setup_flask_routes():
         """
         return html_content
 
-    # FIX 3: Using tokenized path for Razorpay Webhook (MUST UPDATE DASHBOARD)
-    @app.route(f'/{TOKEN}/razorpay/webhook', methods=['POST'])
+    @app.route('/razorpay/webhook', methods=['POST'])
     def razorpay_webhook():
         """Endpoint for Razorpay to send payment completion notifications."""
         print("🚨 Webhook received from Razorpay.")
@@ -351,7 +349,7 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
                 "sms": False,
                 "email": False
             },
-            # FIX: Using standard path for Razorpay. 
+            # FIX: Using standard path for Razorpay. The external service MUST be configured without the token prefix.
             "callback_url": f"{BOT_PUBLIC_URL}/order_success",  
             "callback_method": "get",
             "notes": notes  # Pass internal IDs to webhook via order entity
@@ -1614,7 +1612,7 @@ def handle_admin_callbacks(data, chat_id, message_id):
                     fallback_msg = (
                         f"🎉 \\*Payment Confirmed\\!\\* \n\n"
                         f"❌ QR Code generation failed\\. Use the Verification Code and Alternative Link\\.\n\n"
-                        f"🆔 \\*Order ID\\*\\: \\#{order_id_escaped}\n"
+                        f"🆔 \\*Order ID\\*\\: \\#{internal_order_id}\n"
                         f"🔢 \\*Verification Code\\*\\: `{escape_markdown(verification_code)}`\n\n"
                         f"Show this verification code at the counter for pickup\n"
                         f"\\*Preparation Time\\*\\: Please visit the canteen counter in about 10\\-15 minutes\\.\n\n"
@@ -1960,6 +1958,7 @@ def handle_text_messages(message):
     chat_id = message.chat.id
     student_db_id = str(chat_id)
     text = message.text.strip()
+    message_id = message.message_id # Get the ID of the user's incoming message
     
     is_admin = chat_id in ADMIN_CHAT_IDS
 

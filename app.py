@@ -34,6 +34,10 @@ import requests
 import io # For in-memory file handling
 
 # --- ENVIRONMENT CHECK ---
+# Configure logging AFTER imports but before using logging
+# Ensure logging is configured before any logging calls are made
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Check essential variables AFTER loading dotenv
 REQUIRED_ENV_VARS = [
     'BOT_TOKEN', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'BOT_PUBLIC_URL',
@@ -74,7 +78,8 @@ logging.info(f"✅ Telegram Bot Token loaded successfully.")
 try:
     # Set log level for telebot
     telebot_logger = telebot.logger
-    telebot_logger.setLevel(logging.INFO) # Set to INFO or WARNING for production
+    # You might want DEBUG during testing, INFO in production
+    telebot_logger.setLevel(logging.INFO)
 
     bot = telebot.TeleBot(TOKEN)
     # Test connection (optional but recommended)
@@ -130,16 +135,11 @@ def is_bot_available_now() -> bool:
     return True # Currently set to always available
 
 def unavailable_message(chat_id):
-    """Sends the standard unavailability message."""
-    try:
-        bot.send_message(chat_id, "The canteen bot is currently unavailable. Please place your order only between 9:00 AM and 5:00 PM IST.")
-    except Exception as e:
-        logging.error(f"Failed to send unavailable message to {chat_id}: {e}")
+    """Sends the standard unavailability message using the enhanced sender."""
+    # Use the enhanced send function which includes logging
+    send_telegram_message(chat_id, "The canteen bot is currently unavailable. Please place your order only between 9:00 AM and 5:00 PM IST.")
 
 # --- FLASK ROUTES ---
-
-# Define routes within a function to keep global scope clean if preferred,
-# but calling it directly at module level is standard for Flask apps.
 
 @app.route('/', methods=['GET'])
 def root():
@@ -295,7 +295,9 @@ def generate_razorpay_payment_link(internal_order_id, amount, student_phone):
         elif re.match(r"^\+\d+$", razorpay_contact):
              pass # Already has country code
         else:
-             razorpay_contact = f"+91{razorpay_contact}" # Assume Indian if just digits
+             # Fallback if it's neither 10 digits nor starts with +
+             logging.warning(f"Uncertain contact format for Razorpay: {razorpay_contact}. Assuming needs +91.")
+             razorpay_contact = f"+91{razorpay_contact.lstrip('+')}" # Add +91, remove existing + if any
 
         data = {
             "amount": int(amount * 100),  # Amount in paise
@@ -381,13 +383,12 @@ def _generate_and_upload_qr(data_to_encode, base_filename, fill_color):
             file_options={"content-type": "image/png", "cache-control": "3600", "upsert": "false"} # Cache for 1 hr, don't overwrite
         )
 
-        # Check Supabase response if needed (V1 client might not return useful data on success)
-        # logging.debug(f"Supabase upload response for {filename}: {response}")
-
         # Construct the public URL manually (more reliable than get_public_url sometimes)
-        public_url = f"{QR_CODE_BASE_URL}/{upload_path}"
+        # Ensure QR_CODE_BASE_URL ends with a '/' for correct joining
+        base_url = QR_CODE_BASE_URL if QR_CODE_BASE_URL.endswith('/') else QR_CODE_BASE_URL + '/'
+        public_url = urllib.parse.urljoin(base_url, upload_path)
 
-        logging.info(f"✅ QR code '{filename}' uploaded to Supabase.")
+        logging.info(f"✅ QR code '{filename}' uploaded. URL: {public_url}")
         return public_url
 
     except Exception as e:
@@ -476,7 +477,12 @@ def get_menu_inline_keyboard(user_id):
          pass
     else:
         # Check if the current user is an admin
-        is_admin = int(user_id) in ADMIN_CHAT_IDS
+        # Convert user_id to int for comparison if ADMIN_CHAT_IDS are ints
+        try:
+            is_admin = int(user_id) in ADMIN_CHAT_IDS
+        except ValueError:
+            is_admin = False # Treat as non-admin if user_id is not convertible to int
+
         for item in menu:
             item_id = item['id']
             name = item.get('name', 'N/A').title()
@@ -564,7 +570,10 @@ def get_menu_text_with_sections(is_admin: bool):
              found_items = True
              menu_text += f"*{section_name}* ({time_str})\n"
              for item in section_items:
-                 item_display = f"{item.get('name', 'N/A').title()} - *₹{item.get('price', 0.0):.2f}*"
+                 # Ensure price is formatted correctly, handle potential None
+                 price = item.get('price')
+                 price_str = f"{price:.2f}" if price is not None else "N/A"
+                 item_display = f"{item.get('name', 'N/A').title()} - *₹{price_str}*"
                  if is_admin:
                      menu_text += f"  - ID {item.get('id', '?')}: {item_display}\n"
                  else:
@@ -593,30 +602,36 @@ def escape_markdown(text):
     # Use re.sub for efficient replacement
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
+# --- ENHANCED LOGGING for send_telegram_message ---
 def send_telegram_message(chat_id, text, **kwargs):
-    """Wrapper for bot.send_message with basic error handling."""
+    """Wrapper for bot.send_message with more detailed error handling."""
+    logging.info(f"Attempting to send message to {chat_id}: '{text[:50]}...'") # Log start
     try:
-        bot.send_message(chat_id, text, **kwargs)
+        response = bot.send_message(chat_id, text, **kwargs)
+        logging.info(f"Successfully sent message to {chat_id}. Message ID: {response.message_id}") # Log success
+        return True # Indicate success
     except telebot.apihelper.ApiTelegramException as e:
-        logging.error(f"Telegram API Error sending to {chat_id}: {e}")
-        # Handle specific errors like blocked bot, chat not found?
+        logging.error(f"❌ Telegram API Error sending to {chat_id}: {e.error_code} - {e.description}")
+        # Log specifics if available
+        if "bot was blocked by the user" in str(e):
+             logging.warning(f"Bot blocked by user {chat_id}. Cannot send message.")
+        elif "chat not found" in str(e):
+             logging.warning(f"Chat {chat_id} not found.")
+        # Add more specific checks if needed
+        return False # Indicate failure
     except Exception as e:
-        logging.error(f"Unexpected error sending message to {chat_id}: {e}")
+        logging.error(f"❌ Unexpected error in send_telegram_message to {chat_id}: {e}")
+        traceback.print_exc() # Print full traceback for unexpected errors
+        return False # Indicate failure
 
 def send_admin_message(admin_id, text, parse_mode='MarkdownV2', reply_markup=None):
     """Sends a message to a specific admin ID with fallback parsing."""
-    try:
-        # Try sending with MarkdownV2
-        send_telegram_message(admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-    except Exception as e:
-        logging.warning(f"Failed to send admin message ({parse_mode}) to {admin_id}. Falling back. Error: {e}")
-        try:
-             # Fallback 1: Try standard Markdown
-             send_telegram_message(admin_id, text, parse_mode='Markdown', reply_markup=reply_markup)
-        except Exception as e2:
-             logging.error(f"Failed to send admin message (Markdown) to {admin_id}. Sending plain text. Error: {e2}")
-             # Fallback 2: Send as plain text
-             send_telegram_message(admin_id, text, parse_mode=None, reply_markup=reply_markup)
+    if not send_telegram_message(admin_id, text, parse_mode=parse_mode, reply_markup=reply_markup):
+        logging.warning(f"Failed to send admin message ({parse_mode}) to {admin_id}. Falling back.")
+        if not send_telegram_message(admin_id, text, parse_mode='Markdown', reply_markup=reply_markup):
+            logging.error(f"Failed to send admin message (Markdown) to {admin_id}. Sending plain text.")
+            send_telegram_message(admin_id, text, parse_mode=None, reply_markup=reply_markup)
+
 
 def send_admin_notification(order_details, verification_code):
     """Sends a formatted notification about a new paid order to all admins."""
@@ -634,11 +649,13 @@ def send_admin_notification(order_details, verification_code):
 
         # Escape dynamic content for MarkdownV2
         items_summary = "\n".join([
+            # Ensure price is handled correctly if None
             f"• {escape_markdown(item.get('name', 'Item').title())} x {item.get('qty', 1)} \\(₹{item.get('price', 0.0):.2f}\\)"
             for item in items_list
         ]) if items_list else escape_markdown("No items listed")
 
-        total_amount_esc = escape_markdown(f"{order_details.get('total_amount', 0.0):.2f}")
+        total_amount = order_details.get('total_amount')
+        total_amount_esc = escape_markdown(f"{total_amount:.2f}") if total_amount is not None else "N/A"
         order_id_esc = escape_markdown(str(order_id))
         verification_code_esc = escape_markdown(verification_code or 'N/A')
         identifier_esc = escape_markdown(display_identifier)
@@ -702,7 +719,7 @@ def handle_successful_payment(internal_order_id, student_db_id):
     service_type = order_details.get('service_type', 'N/A').replace('_', ' ').title()
 
     # Prepare user message components
-    link_markdown = escape_markdown("QR generation failed")
+    link_markdown = escape_markdown("(Ticket link generation failed)") # Default if web_link is None
     if web_link:
          link_markdown = f"[{escape_markdown('Click Here to View Ticket')}]({web_link})" # Link target must NOT be escaped
 
@@ -713,8 +730,6 @@ def handle_successful_payment(internal_order_id, student_db_id):
         f"*Service:* {escape_markdown(service_type)}\n\n"
         f"*Est\\. Prep Time:* ~10\\-15 minutes\\.\n"
         f"*Pickup:* Scan QR below or {link_markdown}\\."
-        # Add note about potential browser warnings if applicable
-        # f"\n\\(Note: Your browser might show a security warning for the link, please proceed\\)"
     )
 
     # Update user state
@@ -776,12 +791,14 @@ def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, qua
             # Send main keyboard separately
             send_telegram_message(chat_id, "Tap 'Menu 🍽️' to try again.", reply_markup=get_main_reply_keyboard())
         except Exception:
+            # If edit fails, start_menu_flow sends a new message
             start_menu_flow(student_db_id, chat_id, error_msg=error_msg)
         return
 
     order_details = db_manager.get_order_details(current_order_id)
     # Handle case where order might have been deleted or is None
     if not order_details:
+         logging.warning(f"Order {current_order_id} not found when adding item.")
          start_menu_flow(student_db_id, chat_id, error_msg="⚠️ Order not found. Starting over.")
          return
 
@@ -902,7 +919,8 @@ def handle_admin_text_commands(msg_text, chat_id):
              order_id = order.get('id', '?')
              total = order.get('total_amount', 0.0)
              # Format time (assuming created_at is datetime object from DictCursor)
-             time_str = order.get('created_at').strftime('%I:%M %p') if order.get('created_at') else 'N/A'
+             created_at = order.get('created_at')
+             time_str = created_at.strftime('%I:%M %p') if created_at else 'N/A'
              items_list = db_manager.parse_order_items(order.get('items', '[]'))
              items_summary = ", ".join([f"{item.get('name', '?').title()} x{item.get('qty', 1)}" for item in items_list[:2]]) # Show first 2 items
              if len(items_list) > 2: items_summary += ", ..."
@@ -1014,13 +1032,15 @@ def handle_admin_callbacks(data, chat_id, message_id):
                      student_chat_id = order_details.get('student_phone', 'N/A')
                      collected_phone = db_manager.get_user_phone(student_chat_id)
                      display_identifier = collected_phone or student_chat_id
+                     total_amount = order_details.get("total_amount")
+                     total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
 
                      # Simplified confirmation message in the edited notification
                      delivered_text = (
                           f"🔵 *ORDER DELIVERED* 🔵\n\n"
                           f"🆔 *Order ID:* \\#{escape_markdown(str(order_id))}\n"
                           f"👤 *Customer:* `{escape_markdown(display_identifier)}`\n"
-                          f"💰 *Total:* ₹{escape_markdown(f'{order_details.get("total_amount", 0.0):.2f}')}\n"
+                          f"💰 *Total:* ₹{escape_markdown(total_amount_str)}\n"
                           f"Marked as delivered by admin\\."
                      )
                      edit_or_send(delivered_text, reply_markup=None, parse_mode='MarkdownV2')
@@ -1057,21 +1077,23 @@ def handle_admin_callbacks(data, chat_id, message_id):
             order_details = db_manager.get_order_details(order_id)
             if order_details and order_details.get('payment_link'):
                 link = order_details['payment_link']
-                amount = order_details.get('total_amount', 0.0)
+                amount = order_details.get('total_amount')
+                amount_str = f"{amount:.2f}" if amount is not None else "N/A"
                 copy_msg = (
                     f"📋 *Payment Link for Order \\#{order_id}*:\n\n"
                     f"`{escape_markdown(link)}`\n\n"
-                    f"*Amount:* ₹{escape_markdown(f'{amount:.2f}')}"
+                    f"*Amount:* ₹{escape_markdown(amount_str)}"
                 )
                 # Send as a new message, don't edit the payment prompt
                 send_telegram_message(chat_id, copy_msg, parse_mode='MarkdownV2')
                 # Answer callbackquery to remove the "loading" state on the button
-                bot.answer_callback_query(call.id, text="Link sent below.")
+                # bot.answer_callback_query(call.id, text="Link sent below.") # Already answered
             else:
                  bot.answer_callback_query(call.id, text="Payment link not found.", show_alert=True)
         except (IndexError, ValueError):
              logging.error(f"Invalid copy link callback data: {data}")
              bot.answer_callback_query(call.id, text="Error copying link.", show_alert=True)
+        # Need to re-answer callback query here if using this function separately
 
     # ... [Rest of user-side ordering callbacks: item:, qty:, type_qty:, add_more, checkout, service:, confirm_pay] ...
     # These should largely remain the same, just ensure they call the correct db_manager functions
@@ -1139,9 +1161,10 @@ def handle_admin_callbacks(data, chat_id, message_id):
             payment_keyboard = create_payment_keyboard(payment_link, current_order_id)
             payment_qr_url = generate_payment_qr_code(payment_link, current_order_id)
 
+            total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
             payment_msg = (
                 f"✅ *Order Ready for Payment* \\(ID: \\#{current_order_id}\\)\n\n"
-                f"💰 *Total:* ₹{escape_markdown(f'{total_amount:.2f}')}\n\n"
+                f"💰 *Total:* ₹{escape_markdown(total_amount_str)}\n\n"
                 f"💳 Please pay using the button or QR code below\\.\n"
                 f"_(Status updates automatically after payment)_"
             )
@@ -1175,12 +1198,121 @@ def handle_admin_callbacks(data, chat_id, message_id):
         logging.warning(f"Unhandled callback data received: {data}")
         # Optionally answer the callback to remove the loading state
         try:
-             bot.answer_callback_query(call.id, text="Action not recognized.")
+             # bot.answer_callback_query(call.id, text="Action not recognized.") # Already answered
+             pass
         except Exception:
              pass
 
 # ... (rest of the ordering flow handlers: prompt_for_phone_number, start_menu_flow, handle_status_check) ...
 # Ensure these are robust against errors from db_manager or Telegram API
+def prompt_for_phone_number(student_db_id, chat_id):
+    """Sends message prompting user to type their phone number."""
+    logging.info(f"Prompting user {student_db_id} for phone number.")
+    # Ensure state is correctly set before sending prompt
+    db_manager.set_session_state(student_db_id, 'awaiting_phone_number', db_manager.get_session_order_id(student_db_id))
+
+    msg = (
+        "📞 **Contact Number Needed**\n\n"
+        "Please *type your mobile number* (e.g., `9876543210` or `+919876543210`) so we can finalize your order."
+        "\n_(Tap 'Cancel Order' below if you don't wish to proceed)_"
+    )
+    # Use the specific reply keyboard for phone entry
+    send_telegram_message(chat_id, msg, parse_mode='Markdown', reply_markup=get_phone_entry_keyboard())
+
+def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
+    """Initiates or restarts the menu selection flow."""
+    logging.info(f"Starting menu flow for user {student_db_id}. message_id={message_id}")
+    current_order_id = db_manager.get_session_order_id(student_db_id)
+    is_admin = int(student_db_id) in ADMIN_CHAT_IDS
+
+    # Check if current order is reusable (status 'pending') or create new
+    reuse_order = False
+    if current_order_id:
+        order_details = db_manager.get_order_details(current_order_id)
+        if order_details and order_details.get('status') == 'pending':
+            reuse_order = True
+            logging.info(f"Reusing pending order {current_order_id} for user {student_db_id}.")
+        else:
+             logging.info(f"Current order {current_order_id} is not pending ({order_details.get('status') if order_details else 'not found'}). Creating new order.")
+
+    if not reuse_order:
+        new_order_id = db_manager.create_order(student_db_id, [], 0.0, 'pending')
+        if new_order_id is None:
+            logging.error(f"Failed to create new order for user {student_db_id}.")
+            send_telegram_message(chat_id, "❌ Error starting a new order. Please try again later.",
+                                 reply_markup=get_main_reply_keyboard())
+            # Reset state just in case
+            db_manager.set_session_state(student_db_id, 'initial', None)
+            return
+        current_order_id = new_order_id
+        # Update session immediately with the new order ID
+        db_manager.set_session_state(student_db_id, 'ordering_item', current_order_id)
+
+    # Update state (or re-update if reusing order)
+    db_manager.set_session_state(student_db_id, 'ordering_item', current_order_id)
+
+    # Get menu text
+    main_message = get_menu_text_with_sections(is_admin=is_admin)
+    if error_msg:
+        main_message = f"{error_msg}\n\n{main_message}"
+
+    # Get the appropriate keyboard
+    menu_keyboard = get_menu_inline_keyboard(student_db_id)
+
+    # Send or Edit message
+    if message_id:
+        try:
+            bot.edit_message_text(main_message, chat_id, message_id,
+                                  reply_markup=menu_keyboard, parse_mode='Markdown')
+        except telebot.apihelper.ApiTelegramException as e:
+            if "message is not modified" not in str(e) and "message can't be edited" not in str(e):
+                 logging.warning(f"Editing menu message {message_id} failed ({e}), sending new.")
+                 send_telegram_message(chat_id, main_message, reply_markup=menu_keyboard, parse_mode='Markdown')
+            # else ignore "not modified" or "can't be edited" errors
+        except Exception as e:
+             logging.error(f"Unexpected error editing menu message {message_id}: {e}")
+             send_telegram_message(chat_id, main_message, reply_markup=menu_keyboard, parse_mode='Markdown')
+    else:
+        # Send as a new message if no message_id provided
+        send_telegram_message(chat_id, main_message, reply_markup=menu_keyboard, parse_mode='Markdown')
+
+def handle_status_check(student_db_id, chat_id):
+    """Handles the 'Order Status 📊' button press."""
+    logging.info(f"Handling status check for user {student_db_id}")
+    current_order_id = db_manager.get_session_order_id(student_db_id)
+
+    if not current_order_id:
+        send_telegram_message(chat_id, "📊 No active order found. Tap 'Menu 🍽️' to start one.",
+                             reply_markup=get_main_reply_keyboard())
+        return
+
+    order_details = db_manager.get_order_details(current_order_id)
+
+    if not order_details:
+        send_telegram_message(chat_id, f"📊 Could not retrieve details for order #{current_order_id}. It might be old or cancelled.",
+                              reply_markup=get_main_reply_keyboard())
+        # Optionally reset state if order is gone
+        # db_manager.set_session_state(student_db_id, 'initial', None)
+        return
+
+    status = order_details.get('status', 'N/A').replace('_', ' ').title()
+    total = order_details.get('total_amount', 0.0)
+    service_type = order_details.get('service_type', 'N/A').replace('_', ' ').title()
+    pickup_code = order_details.get('pickup_code', 'Not yet generated')
+    items_list = db_manager.parse_order_items(order_details.get('items'))
+    items_summary = "\n".join([f"- {item['name'].title()} x {item['qty']}" for item in items_list]) if items_list else "No items recorded"
+
+    # Use MarkdownV2 for status message, requires escaping
+    status_msg = (
+        f"📊 *Order Status* \\(ID: \\#{escape_markdown(str(current_order_id))}\\)\n\n"
+        f"*Status:* {escape_markdown(status)}\n"
+        f"*Total:* ₹{escape_markdown(f'{total:.2f}')}\n"
+        f"*Service:* {escape_markdown(service_type)}\n"
+        f"*Pickup Code:* `{escape_markdown(pickup_code)}`\n\n"
+        f"*Items:*\n{escape_markdown(items_summary)}"
+    )
+
+    send_telegram_message(chat_id, status_msg, parse_mode='MarkdownV2', reply_markup=get_main_reply_keyboard())
 
 
 # --- TELEGRAM BOT HANDLERS ---
@@ -1207,8 +1339,10 @@ def send_welcome(message: Message):
          # Don't reset if order is waiting for payment or ready for pickup
          if order_details and order_details.get('status') in ['payment_pending', 'paid', 'pickup_ready']:
               reset_state = False
+              logging.info(f"User {user_id} has an active order ({order_details.get('status')}). Not resetting state on /start.")
 
     if reset_state:
+         logging.info(f"Resetting state to initial for user {user_id} on /start.")
          db_manager.set_session_state(user_id, 'initial', None)
     else:
          # Just update last_active timestamp if state isn't changing
@@ -1299,8 +1433,21 @@ def handle_callbacks(call):
         handle_admin_callbacks(data, chat_id, message_id)
     else:
         # Handle user ordering flow and general callbacks (like cancel, copy)
-        # This duplicates some logic from handle_admin_callbacks, ideally refactor
-        handle_user_callbacks(call) # Create a separate function for user callbacks
+        # Ensure user callbacks also handle potential exceptions gracefully
+        try:
+            handle_user_callbacks(call) # Use the separate function
+        except Exception as e:
+             logging.error(f"Error handling user callback {data} for user {user_id}: {e}")
+             traceback.print_exc()
+             # Try to send a generic error message to the user
+             try:
+                 # Attempt to edit the message where the button was pressed
+                 bot.edit_message_text("❌ An unexpected error occurred. Please try starting over.", chat_id, message_id, reply_markup=None)
+                 send_telegram_message(chat_id, "Tap 'Menu 🍽️' to begin again.", reply_markup=get_main_reply_keyboard())
+             except Exception:
+                 # If editing fails, send a new message
+                 send_telegram_message(chat_id, "❌ An unexpected error occurred. Tap 'Menu 🍽️' to start over.", reply_markup=get_main_reply_keyboard())
+
 
 # NEW function to handle user-specific and general callbacks cleanly
 def handle_user_callbacks(call):
@@ -1318,7 +1465,9 @@ def handle_user_callbacks(call):
             item = db_manager.get_menu_item(item_id)
             if item and current_order_id is not None:
                 # Prompt for quantity
-                text = f"Selected *{item['name'].title()}* (₹{item['price']:.2f}). How many?"
+                price = item.get('price')
+                price_str = f"{price:.2f}" if price is not None else "N/A"
+                text = f"Selected *{item.get('name', 'N/A').title()}* (₹{price_str}). How many?"
                 keyboard = get_quantity_inline_keyboard(item_id)
                 bot.edit_message_text(text, chat_id, message_id, reply_markup=keyboard, parse_mode='Markdown')
                 db_manager.set_session_state(user_id, f'selecting_quantity_{item_id}', current_order_id) # Update state
@@ -1326,7 +1475,7 @@ def handle_user_callbacks(call):
                 raise ValueError("Item or order not found")
         except (IndexError, ValueError, TypeError) as e:
              logging.error(f"Error processing item callback {data}: {e}")
-             bot.edit_message_text("❌ Error selecting item. Please start over.", chat_id, message_id)
+             bot.edit_message_text("❌ Error selecting item. Please start over.", chat_id, message_id, reply_markup=None)
              start_menu_flow(user_id, chat_id) # Restart flow
 
     elif data.startswith('qty:'):
@@ -1339,8 +1488,8 @@ def handle_user_callbacks(call):
             add_item_to_cart_and_prompt(user_id, chat_id, message_id, item_id, quantity)
         except (IndexError, ValueError, TypeError) as e:
              logging.error(f"Error processing quantity callback {data}: {e}")
-             bot.edit_message_text("❌ Invalid quantity. Please try again.", chat_id, message_id)
-             # Optionally go back to quantity selection? For now, just show error.
+             bot.edit_message_text("❌ Invalid quantity selection. Please try again.", chat_id, message_id, reply_markup=get_quantity_inline_keyboard(item_id)) # Show quantity keyboard again
+
 
     elif data.startswith('type_qty:'):
         try:
@@ -1348,7 +1497,7 @@ def handle_user_callbacks(call):
             item = db_manager.get_menu_item(item_id)
             if item and current_order_id is not None:
                  db_manager.set_session_state(user_id, f'awaiting_typed_quantity_{item_id}', current_order_id)
-                 text = f"✍️ Please *type the quantity* for *{item['name'].title()}*:"
+                 text = f"✍️ Please *type the quantity* for *{item.get('name', 'N/A').title()}*:"
                  # Provide a cancel/back option
                  back_key = InlineKeyboardMarkup().add(InlineKeyboardButton("↩️ Back to Menu", callback_data="menu_start"))
                  bot.edit_message_text(text, chat_id, message_id, reply_markup=back_key, parse_mode='Markdown')
@@ -1356,7 +1505,7 @@ def handle_user_callbacks(call):
                  raise ValueError("Item or order not found")
         except (IndexError, ValueError, TypeError) as e:
              logging.error(f"Error processing type_qty callback {data}: {e}")
-             bot.edit_message_text("❌ Error. Please start over.", chat_id, message_id)
+             bot.edit_message_text("❌ Error. Please start over.", chat_id, message_id, reply_markup=None)
              start_menu_flow(user_id, chat_id)
 
     elif data == 'add_more':
@@ -1369,7 +1518,7 @@ def handle_user_callbacks(call):
              bot.edit_message_text("🍴 *Checkout:* Choose service type:", chat_id, message_id,
                                    reply_markup=get_service_type_inline_keyboard(), parse_mode='Markdown')
         else:
-             bot.edit_message_text("🛒 Your cart is empty or order expired. Please start over.", chat_id, message_id)
+             bot.edit_message_text("🛒 Your cart is empty or order expired. Please start over.", chat_id, message_id, reply_markup=None)
              start_menu_flow(user_id, chat_id)
 
     elif data.startswith('service:'):
@@ -1390,14 +1539,17 @@ def handle_user_callbacks(call):
 
                       # Phone number exists, show final confirmation
                       items_list = db_manager.parse_order_items(order.get('items'))
-                      food_summary = "\n".join([f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})" for item in items_list])
+                      food_summary = "\n".join([f"• {item.get('name', '?').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})" for item in items_list])
                       contact = db_manager.get_user_phone(user_id) # Fetch again to be sure
+                      total_amount = order.get("total_amount")
+                      total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
+
 
                       confirmation_msg = (
-                           f"📝 *Final Confirmation* (Order \\#{current_order_id})\n\n"
-                           f"*Contact:* `{escape_markdown(contact)}`\n"
+                           f"📝 *Final Confirmation* \\(Order \\#{current_order_id}\\)\n\n"
+                           f"*Contact:* `{escape_markdown(contact or 'Not Provided')}`\n"
                            f"*Service:* {escape_markdown(service_type.replace('_', ' ').title())}\n"
-                           f"*Total:* ₹{escape_markdown(f'{order.get("total_amount", 0.0):.2f}')}\n\n"
+                           f"*Total:* ₹{escape_markdown(total_amount_str)}\n\n"
                            f"*Items:*\n{food_summary}\n\n"
                            f"Confirm to proceed to payment\\."
                       )
@@ -1410,36 +1562,28 @@ def handle_user_callbacks(call):
                  raise ValueError("Invalid service type or missing order ID")
         except (IndexError, ValueError, TypeError) as e:
              logging.error(f"Error processing service type callback {data}: {e}")
-             bot.edit_message_text("❌ Error setting service type. Please start over.", chat_id, message_id)
+             bot.edit_message_text("❌ Error setting service type. Please start over.", chat_id, message_id, reply_markup=None)
              start_menu_flow(user_id, chat_id)
 
-    # --- General Callbacks (Cancel, Copy Link) ---
-    # These were moved from handle_admin_callbacks
+    # --- General Callbacks (Cancel, Copy Link, Back to Menu) ---
     elif data == 'menu_start': # Back to menu from quantity etc.
         start_menu_flow(user_id, chat_id, message_id)
 
     elif data == 'cancel_order':
-        if current_order_id:
-             db_manager.update_order_status(current_order_id, 'cancelled')
-             db_manager.set_session_state(user_id, 'initial', None)
-             logging.info(f"Order {current_order_id} cancelled by user {user_id}.")
-             bot.edit_message_text("❌ Order cancelled.", chat_id, message_id, reply_markup=None)
-             send_telegram_message(chat_id, "Tap 'Menu 🍽️' to start a new order.", reply_markup=get_main_reply_keyboard())
-        else:
-             bot.edit_message_text("No active order to cancel.", chat_id, message_id, reply_markup=None)
+        # This can be triggered by admin or user, logic is the same
+        handle_admin_callbacks(data, chat_id, message_id) # Reuse admin logic
 
     elif data.startswith('copy_razorpay_'):
-        # This is handled within handle_admin_callbacks for simplicity,
-        # as it doesn't modify state and just sends info. Can be moved here too.
-        handle_admin_callbacks(data, chat_id, message_id) # Reuse existing logic for now
+        # This can be triggered by admin or user
+        handle_admin_callbacks(data, call) # Pass the full call object
 
     elif data == 'confirm_pay':
-         # This crucial step involves external calls and state changes, keep in main handler
-         handle_admin_callbacks(data, chat_id, message_id) # Reuse existing logic
+         # This crucial step involves external calls and state changes
+         handle_admin_callbacks(data, chat_id, message_id) # Reuse admin logic
 
     else:
         logging.warning(f"Unhandled user callback data received: {data}")
-        # Optionally answer callback
+        # Optionally answer callback if not already done
         try: bot.answer_callback_query(call.id, text="Action not recognized.")
         except Exception: pass
 
@@ -1464,8 +1608,11 @@ def handle_text_messages(message: Message):
 
     # 2. Check time availability for non-admins for subsequent actions
     if not is_admin and not is_bot_available_now():
-        unavailable_message(chat_id)
-        return
+        # Don't send unavailable message if they just typed 'Cancel' or something innocuous
+        current_state_check = db_manager.get_session_state(user_id)
+        if current_state_check != 'initial': # Only block if in an active flow
+             unavailable_message(chat_id)
+             return
 
     # 3. Check user state for expected inputs (phone, quantity)
     current_state = db_manager.get_session_state(user_id)
@@ -1507,14 +1654,16 @@ def handle_text_messages(message: Message):
         if order:
              service_type = order.get('service_type', 'N/A')
              items_list = db_manager.parse_order_items(order.get('items'))
-             food_summary = "\n".join([f"• {item['name'].title()} x {item['qty']} (₹{item['price']:.2f})" for item in items_list])
+             food_summary = "\n".join([f"• {item.get('name', '?').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})" for item in items_list])
              contact = phone_number # Use the number just entered
+             total_amount = order.get("total_amount")
+             total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
 
              confirmation_msg = (
-                  f"📝 *Final Confirmation* (Order \\#{current_order_id})\n\n"
+                  f"📝 *Final Confirmation* \\(Order \\#{current_order_id}\\)\n\n"
                   f"*Contact:* `{escape_markdown(contact)}`\n"
                   f"*Service:* {escape_markdown(service_type.replace('_', ' ').title())}\n"
-                  f"*Total:* ₹{escape_markdown(f'{order.get("total_amount", 0.0):.2f}')}\n\n"
+                  f"*Total:* ₹{escape_markdown(total_amount_str)}\n\n"
                   f"*Items:*\n{food_summary}\n\n"
                   f"Confirm to proceed to payment\\."
              )
@@ -1605,3 +1754,4 @@ def webhook():
 
 # Vercel's Python runtime will automatically find and serve the 'app' object.
 # No app.run() needed.
+

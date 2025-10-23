@@ -805,10 +805,18 @@ def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, qua
     current_items = db_manager.parse_order_items(order_details.get('items')) # Use parser
     current_total = order_details.get('total_amount', 0.0)
 
+    # Ensure item price is valid before calculation
+    item_price = item.get('price')
+    if item_price is None:
+         logging.error(f"Item {item_id} ('{item.get('name')}') has invalid price. Cannot add to cart.")
+         try: bot.edit_message_text("⚠️ Cannot add item, price is missing.", chat_id, message_id)
+         except Exception: send_telegram_message(chat_id, "⚠️ Cannot add item, price is missing.")
+         return
+
     # Check if item already in cart to update quantity? (Optional enhancement)
     # For now, just append
-    current_items.append({'id': item['id'], 'name': item['name'], 'price': item['price'], 'qty': quantity})
-    new_total = current_total + (item['price'] * quantity)
+    current_items.append({'id': item['id'], 'name': item['name'], 'price': item_price, 'qty': quantity})
+    new_total = current_total + (item_price * quantity)
 
     # Update DB
     if not db_manager.update_order_cart(current_order_id, current_items, new_total):
@@ -951,6 +959,9 @@ def handle_admin_callbacks(data, chat_id, message_id):
         except telebot.apihelper.ApiTelegramException as e:
             if "message is not modified" in str(e):
                 pass # Ignore if message hasn't changed
+            elif "message to edit not found" in str(e):
+                 logging.warning(f"Message {message_id} not found to edit, sending new.")
+                 send_admin_message(chat_id, text, **kwargs)
             else:
                 logging.warning(f"Editing admin message failed ({e}), sending new.")
                 send_admin_message(chat_id, text, **kwargs) # Use send_admin_message for fallback
@@ -1072,28 +1083,8 @@ def handle_admin_callbacks(data, chat_id, message_id):
              edit_or_send("No active order to cancel.", reply_markup=None)
 
     elif data.startswith('copy_razorpay_'):
-        try:
-            order_id = int(data.split('_')[-1])
-            order_details = db_manager.get_order_details(order_id)
-            if order_details and order_details.get('payment_link'):
-                link = order_details['payment_link']
-                amount = order_details.get('total_amount')
-                amount_str = f"{amount:.2f}" if amount is not None else "N/A"
-                copy_msg = (
-                    f"📋 *Payment Link for Order \\#{order_id}*:\n\n"
-                    f"`{escape_markdown(link)}`\n\n"
-                    f"*Amount:* ₹{escape_markdown(amount_str)}"
-                )
-                # Send as a new message, don't edit the payment prompt
-                send_telegram_message(chat_id, copy_msg, parse_mode='MarkdownV2')
-                # Answer callbackquery to remove the "loading" state on the button
-                # bot.answer_callback_query(call.id, text="Link sent below.") # Already answered
-            else:
-                 bot.answer_callback_query(call.id, text="Payment link not found.", show_alert=True)
-        except (IndexError, ValueError):
-             logging.error(f"Invalid copy link callback data: {data}")
-             bot.answer_callback_query(call.id, text="Error copying link.", show_alert=True)
-        # Need to re-answer callback query here if using this function separately
+        # Pass the full call object to potentially answer callback query later
+        handle_copy_razorpay(data, call) # Use dedicated handler
 
     # ... [Rest of user-side ordering callbacks: item:, qty:, type_qty:, add_more, checkout, service:, confirm_pay] ...
     # These should largely remain the same, just ensure they call the correct db_manager functions
@@ -1203,6 +1194,36 @@ def handle_admin_callbacks(data, chat_id, message_id):
         except Exception:
              pass
 
+# --- Dedicated handler for copy razorpay link ---
+def handle_copy_razorpay(data, call):
+    """Handles the copy_razorpay callback separately."""
+    chat_id = call.message.chat.id
+    try:
+        order_id = int(data.split('_')[-1])
+        order_details = db_manager.get_order_details(order_id)
+        if order_details and order_details.get('payment_link'):
+            link = order_details['payment_link']
+            amount = order_details.get('total_amount')
+            amount_str = f"{amount:.2f}" if amount is not None else "N/A"
+            copy_msg = (
+                f"📋 *Payment Link for Order \\#{order_id}*:\n\n"
+                f"`{escape_markdown(link)}`\n\n"
+                f"*Amount:* ₹{escape_markdown(amount_str)}"
+            )
+            # Send as a new message, don't edit the payment prompt
+            send_telegram_message(chat_id, copy_msg, parse_mode='MarkdownV2')
+            # Answer callbackquery to remove the "loading" state on the button
+            bot.answer_callback_query(call.id, text="Link sent as a new message.")
+        else:
+             bot.answer_callback_query(call.id, text="Payment link not found.", show_alert=True)
+    except (IndexError, ValueError):
+         logging.error(f"Invalid copy link callback data: {data}")
+         bot.answer_callback_query(call.id, text="Error copying link.", show_alert=True)
+    except Exception as e:
+         logging.error(f"Unexpected error in handle_copy_razorpay: {e}")
+         bot.answer_callback_query(call.id, text="Internal error.", show_alert=True)
+
+
 # ... (rest of the ordering flow handlers: prompt_for_phone_number, start_menu_flow, handle_status_check) ...
 # Ensure these are robust against errors from db_manager or Telegram API
 def prompt_for_phone_number(student_db_id, chat_id):
@@ -1223,7 +1244,13 @@ def start_menu_flow(student_db_id, chat_id, message_id=None, error_msg=None):
     """Initiates or restarts the menu selection flow."""
     logging.info(f"Starting menu flow for user {student_db_id}. message_id={message_id}")
     current_order_id = db_manager.get_session_order_id(student_db_id)
-    is_admin = int(student_db_id) in ADMIN_CHAT_IDS
+
+    # Check admin status correctly
+    try:
+        is_admin = int(student_db_id) in ADMIN_CHAT_IDS
+    except ValueError:
+        is_admin = False # Treat non-integer IDs as non-admin
+
 
     # Check if current order is reusable (status 'pending') or create new
     reuse_order = False
@@ -1300,7 +1327,7 @@ def handle_status_check(student_db_id, chat_id):
     service_type = order_details.get('service_type', 'N/A').replace('_', ' ').title()
     pickup_code = order_details.get('pickup_code', 'Not yet generated')
     items_list = db_manager.parse_order_items(order_details.get('items'))
-    items_summary = "\n".join([f"- {item['name'].title()} x {item['qty']}" for item in items_list]) if items_list else "No items recorded"
+    items_summary = "\n".join([f"- {item.get('name', '?').title()} x {item.get('qty', 1)}" for item in items_list]) if items_list else "No items recorded"
 
     # Use MarkdownV2 for status message, requires escaping
     status_msg = (
@@ -1319,45 +1346,62 @@ def handle_status_check(student_db_id, chat_id):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message: Message):
+    # --- ADDED GRANULAR LOGGING ---
     chat_id = message.chat.id
-    user_id = str(chat_id) # Use chat_id as the unique ID in the users table
-    logging.info(f"/start command received from user {user_id}")
+    user_id = str(chat_id)
+    logging.info(f"[send_welcome] /start received from user {user_id}")
 
-    is_admin = chat_id in ADMIN_CHAT_IDS
+    try:
+        is_admin = chat_id in ADMIN_CHAT_IDS
+        logging.info(f"[send_welcome] User {user_id} is_admin: {is_admin}")
 
-    # Check time availability only for non-admins
-    if not is_admin and not is_bot_available_now():
-        unavailable_message(chat_id)
-        return
+        # Check time availability only for non-admins
+        if not is_admin and not is_bot_available_now():
+            logging.info(f"[send_welcome] User {user_id} outside operating hours. Sending unavailable message.")
+            unavailable_message(chat_id)
+            return
 
-    # Initialize or update user state
-    # Reset state to initial only if the current order isn't active (paid, pending payment, etc.)
-    current_order_id = db_manager.get_session_order_id(user_id)
-    reset_state = True
-    if current_order_id:
-         order_details = db_manager.get_order_details(current_order_id)
-         # Don't reset if order is waiting for payment or ready for pickup
-         if order_details and order_details.get('status') in ['payment_pending', 'paid', 'pickup_ready']:
-              reset_state = False
-              logging.info(f"User {user_id} has an active order ({order_details.get('status')}). Not resetting state on /start.")
+        logging.info(f"[send_welcome] Checking current order state for user {user_id}.")
+        # Initialize or update user state
+        current_order_id = db_manager.get_session_order_id(user_id)
+        reset_state = True
+        if current_order_id:
+             order_details = db_manager.get_order_details(current_order_id)
+             if order_details and order_details.get('status') in ['payment_pending', 'paid', 'pickup_ready']:
+                  reset_state = False
+                  logging.info(f"[send_welcome] User {user_id} has active order {current_order_id} ({order_details.get('status')}). Not resetting state.")
 
-    if reset_state:
-         logging.info(f"Resetting state to initial for user {user_id} on /start.")
-         db_manager.set_session_state(user_id, 'initial', None)
-    else:
-         # Just update last_active timestamp if state isn't changing
-          db_manager.set_session_state(user_id, db_manager.get_session_state(user_id), current_order_id)
+        if reset_state:
+             logging.info(f"[send_welcome] Resetting state to 'initial' for user {user_id}.")
+             db_manager.set_session_state(user_id, 'initial', None)
+        else:
+             logging.info(f"[send_welcome] Updating last_active for user {user_id} with state '{db_manager.get_session_state(user_id)}'.")
+             db_manager.set_session_state(user_id, db_manager.get_session_state(user_id), current_order_id)
 
+        logging.info(f"[send_welcome] Preparing welcome message and keyboard for user {user_id}.")
+        if is_admin:
+            reply_markup = get_admin_reply_keyboard()
+            welcome_msg = "👋 Hello Admin! Use the panel or text commands."
+        else:
+            reply_markup = get_main_reply_keyboard()
+            welcome_msg = ("👋 Welcome to the *Digital Canteen Bot*!\n\n"
+                           "Tap *Menu 🍽️* to see items and place an order.")
 
-    if is_admin:
-        reply_markup = get_admin_reply_keyboard()
-        welcome_msg = "👋 Hello Admin! Use the panel or text commands."
-    else:
-        reply_markup = get_main_reply_keyboard()
-        welcome_msg = ("👋 Welcome to the *Digital Canteen Bot*!\n\n"
-                       "Tap *Menu 🍽️* to see items and place an order.")
+        logging.info(f"[send_welcome] Sending welcome message to user {user_id}.")
+        # Use the function that includes detailed logging
+        success = send_telegram_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=reply_markup)
+        if success:
+            logging.info(f"[send_welcome] Welcome message sent successfully to {user_id}.")
+        else:
+             logging.error(f"[send_welcome] Failed to send welcome message to {user_id}.")
 
-    send_telegram_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=reply_markup)
+    except Exception as e:
+         # Log any unexpected errors within send_welcome
+         logging.error(f"[send_welcome] Unexpected error processing /start for user {user_id}: {e}")
+         traceback.print_exc()
+         # Try sending a generic error message
+         send_telegram_message(chat_id, "Sorry, an error occurred. Please try /start again.")
+    # --- END ADDED LOGGING ---
 
 
 @bot.message_handler(func=lambda message: message.text in ['Menu 🍽️', 'Order Status 📊', 'Admin Panel ⚙️', 'Orders 📦'])
@@ -1488,7 +1532,9 @@ def handle_user_callbacks(call):
             add_item_to_cart_and_prompt(user_id, chat_id, message_id, item_id, quantity)
         except (IndexError, ValueError, TypeError) as e:
              logging.error(f"Error processing quantity callback {data}: {e}")
-             bot.edit_message_text("❌ Invalid quantity selection. Please try again.", chat_id, message_id, reply_markup=get_quantity_inline_keyboard(item_id)) # Show quantity keyboard again
+             item_id_fallback = data.split(':')[1] if len(data.split(':')) > 1 else None
+             fallback_keyboard = get_quantity_inline_keyboard(item_id_fallback) if item_id_fallback else None
+             bot.edit_message_text("❌ Invalid quantity selection. Please try again.", chat_id, message_id, reply_markup=fallback_keyboard)
 
 
     elif data.startswith('type_qty:'):
@@ -1575,7 +1621,7 @@ def handle_user_callbacks(call):
 
     elif data.startswith('copy_razorpay_'):
         # This can be triggered by admin or user
-        handle_admin_callbacks(data, call) # Pass the full call object
+        handle_copy_razorpay(data, call) # Pass the full call object
 
     elif data == 'confirm_pay':
          # This crucial step involves external calls and state changes
@@ -1754,4 +1800,5 @@ def webhook():
 
 # Vercel's Python runtime will automatically find and serve the 'app' object.
 # No app.run() needed.
+
 

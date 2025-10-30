@@ -1328,12 +1328,14 @@ def handle_status_check(student_db_id, chat_id):
     pickup_code = order_details.get('pickup_code', 'Not yet generated')
     items_list = db_manager.parse_order_items(order_details.get('items'))
     items_summary = "\n".join([f"- {item.get('name', '?').title()} x {item.get('qty', 1)}" for item in items_list]) if items_list else "No items recorded"
+    
+    total_str = f"{total:.2f}" if total is not None else "N/A"
 
     # Use MarkdownV2 for status message, requires escaping
     status_msg = (
         f"📊 *Order Status* \\(ID: \\#{escape_markdown(str(current_order_id))}\\)\n\n"
         f"*Status:* {escape_markdown(status)}\n"
-        f"*Total:* ₹{escape_markdown(f'{total:.2f}')}\n"
+        f"*Total:* ₹{escape_markdown(total_str)}\n"
         f"*Service:* {escape_markdown(service_type)}\n"
         f"*Pickup Code:* `{escape_markdown(pickup_code)}`\n\n"
         f"*Items:*\n{escape_markdown(items_summary)}"
@@ -1364,19 +1366,24 @@ def send_welcome(message: Message):
         logging.info(f"[send_welcome] Checking current order state for user {user_id}.")
         # Initialize or update user state
         current_order_id = db_manager.get_session_order_id(user_id)
+        logging.info(f"[send_welcome] Found current_order_id: {current_order_id}")
         reset_state = True
         if current_order_id:
+             logging.info(f"[send_welcome] Fetching details for order {current_order_id}.")
              order_details = db_manager.get_order_details(current_order_id)
              if order_details and order_details.get('status') in ['payment_pending', 'paid', 'pickup_ready']:
                   reset_state = False
                   logging.info(f"[send_welcome] User {user_id} has active order {current_order_id} ({order_details.get('status')}). Not resetting state.")
+             else:
+                  logging.info(f"[send_welcome] Order {current_order_id} is not active ({order_details.get('status') if order_details else 'not found'}). Will reset state.")
 
         if reset_state:
              logging.info(f"[send_welcome] Resetting state to 'initial' for user {user_id}.")
              db_manager.set_session_state(user_id, 'initial', None)
         else:
-             logging.info(f"[send_welcome] Updating last_active for user {user_id} with state '{db_manager.get_session_state(user_id)}'.")
-             db_manager.set_session_state(user_id, db_manager.get_session_state(user_id), current_order_id)
+             current_state = db_manager.get_session_state(user_id)
+             logging.info(f"[send_welcome] Updating last_active for user {user_id} with state '{current_state}'.")
+             db_manager.set_session_state(user_id, current_state, current_order_id)
 
         logging.info(f"[send_welcome] Preparing welcome message and keyboard for user {user_id}.")
         if is_admin:
@@ -1411,37 +1418,48 @@ def handle_reply_keyboard_buttons(message: Message):
     text = message.text.split(' ')[0] # Get the command part
     logging.info(f"Reply keyboard button '{text}' tapped by user {user_id}")
 
-    is_admin = chat_id in ADMIN_CHAT_IDS
+    try:
+        is_admin = chat_id in ADMIN_CHAT_IDS
 
-    # Check time for non-admin ordering actions
-    if not is_admin and text in ['Menu'] and not is_bot_available_now():
-        unavailable_message(chat_id)
-        return
-
-    # Admin actions
-    if is_admin:
-        if text == 'Admin':
-            # Send the inline dashboard as a new message
-            send_admin_message(chat_id, "⚙️ *Admin Dashboard*\nSelect an action:",
-                              reply_markup=get_admin_dashboard_keyboard(), parse_mode='Markdown')
-            return
-        elif text == 'Orders':
-            # Send the orders dashboard as a new message
-            send_admin_message(chat_id, "📦 *Order Management*\nView today's live orders:",
-                               reply_markup=get_orders_dashboard_keyboard(), parse_mode='Markdown')
+        # Check time for non-admin ordering actions
+        if not is_admin and text in ['Menu'] and not is_bot_available_now():
+            unavailable_message(chat_id)
             return
 
-    # User actions (or Admin using User buttons)
-    if text == 'Menu':
-        current_state = db_manager.get_session_state(user_id)
-        # Prevent starting menu if waiting for typed input
-        if current_state.startswith(('awaiting_typed_quantity_', 'awaiting_phone_number')):
-             send_telegram_message(chat_id, "⚠️ Please complete the current step (type quantity/phone) or cancel first.")
-             return
-        start_menu_flow(user_id, chat_id) # Start the inline menu flow
+        # Admin actions
+        if is_admin:
+            if text == 'Admin':
+                # Send the inline dashboard as a new message
+                logging.info(f"[handle_reply_keyboard] Admin {user_id} opening Admin Panel.")
+                send_admin_message(chat_id, "⚙️ *Admin Dashboard*\nSelect an action:",
+                                  reply_markup=get_admin_dashboard_keyboard(), parse_mode='Markdown')
+                return
+            elif text == 'Orders':
+                # Send the orders dashboard as a new message
+                logging.info(f"[handle_reply_keyboard] Admin {user_id} opening Orders Panel.")
+                send_admin_message(chat_id, "📦 *Order Management*\nView today's live orders:",
+                                   reply_markup=get_orders_dashboard_keyboard(), parse_mode='Markdown')
+                return
 
-    elif text == 'Order': # Corresponds to 'Order Status 📊'
-        handle_status_check(user_id, chat_id)
+        # User actions (or Admin using User buttons)
+        if text == 'Menu':
+            logging.info(f"[handle_reply_keyboard] User {user_id} tapping 'Menu'.")
+            current_state = db_manager.get_session_state(user_id)
+            # Prevent starting menu if waiting for typed input
+            if current_state.startswith(('awaiting_typed_quantity_', 'awaiting_phone_number')):
+                 logging.warning(f"[handle_reply_keyboard] User {user_id} in state '{current_state}', blocking menu start.")
+                 send_telegram_message(chat_id, "⚠️ Please complete the current step (type quantity/phone) or cancel first.")
+                 return
+            start_menu_flow(user_id, chat_id) # Start the inline menu flow
+
+        elif text == 'Order': # Corresponds to 'Order Status 📊'
+            logging.info(f"[handle_reply_keyboard] User {user_id} tapping 'Order Status'.")
+            handle_status_check(user_id, chat_id)
+    
+    except Exception as e:
+        logging.error(f"[handle_reply_keyboard] Unexpected error processing button '{text}' for user {user_id}: {e}")
+        traceback.print_exc()
+        send_telegram_message(chat_id, "Sorry, an error occurred. Please try /start again.")
 
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -1800,5 +1818,4 @@ def webhook():
 
 # Vercel's Python runtime will automatically find and serve the 'app' object.
 # No app.run() needed.
-
 

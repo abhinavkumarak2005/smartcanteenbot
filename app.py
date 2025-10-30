@@ -486,9 +486,10 @@ def get_menu_inline_keyboard(user_id):
         for item in menu:
             item_id = item['id']
             name = item.get('name', 'N/A').title()
-            price = item.get('price', 0.0)
+            price = item.get('price') # Price can be Decimal, float, or None
             # Format button text: Include ID only for admins
-            button_text = f"{name} (₹{price:.2f})"
+            price_str = f"{price:.2f}" if price is not None else "N/A"
+            button_text = f"{name} (₹{price_str})"
             if is_admin:
                 button_text = f"ID {item_id}: {button_text}"
 
@@ -815,8 +816,8 @@ def add_item_to_cart_and_prompt(student_db_id, chat_id, message_id, item_id, qua
 
     # Check if item already in cart to update quantity? (Optional enhancement)
     # For now, just append
-    current_items.append({'id': item['id'], 'name': item['name'], 'price': item_price, 'qty': quantity})
-    new_total = current_total + (item_price * quantity)
+    current_items.append({'id': item['id'], 'name': item['name'], 'price': float(item_price), 'qty': quantity}) # Ensure price is float
+    new_total = current_total + (float(item_price) * quantity)
 
     # Update DB
     if not db_manager.update_order_cart(current_order_id, current_items, new_total):
@@ -928,7 +929,11 @@ def handle_admin_text_commands(msg_text, chat_id):
              total = order.get('total_amount', 0.0)
              # Format time (assuming created_at is datetime object from DictCursor)
              created_at = order.get('created_at')
-             time_str = created_at.strftime('%I:%M %p') if created_at else 'N/A'
+             # Add timezone info if available, or assume UTC and convert
+             if created_at.tzinfo is None:
+                 created_at = created_at.replace(tzinfo=timezone.utc) # Assume UTC
+             time_str = created_at.astimezone(IST).strftime('%I:%M %p') if created_at else 'N/A'
+
              items_list = db_manager.parse_order_items(order.get('items', '[]'))
              items_summary = ", ".join([f"{item.get('name', '?').title()} x{item.get('qty', 1)}" for item in items_list[:2]]) # Show first 2 items
              if len(items_list) > 2: items_summary += ", ..."
@@ -936,7 +941,7 @@ def handle_admin_text_commands(msg_text, chat_id):
              # Escape content for MarkdownV2
              orders_text += (
                  f"{status_emoji} *Order \\#{escape_markdown(str(order_id))}* \\({escape_markdown(status.title())}\\)\n"
-                 f"  \\- Time: {escape_markdown(time_str)}\n"
+                 f"  \\- Time: {escape_markdown(time_str)} (IST)\n"
                  f"  \\- Total: ₹{escape_markdown(f'{total:.2f}')}\n"
                  f"  \\- Items: {escape_markdown(items_summary)}\n\n"
              )
@@ -980,7 +985,10 @@ def handle_admin_callbacks(data, chat_id, message_id):
 
     # Action Callbacks
     elif data == "admin_menu":
-        is_admin_check = chat_id in ADMIN_CHAT_IDS # Should always be true here
+        try:
+            is_admin_check = int(chat_id) in ADMIN_CHAT_IDS # Should always be true here
+        except ValueError:
+             is_admin_check = False
         menu_text = get_menu_text_with_sections(is_admin=is_admin_check)
         # Add instructions for admin menu view
         menu_text += "\n\n*Use text commands to `add`, `update`, or `delete` items.*"
@@ -1660,122 +1668,130 @@ def handle_text_messages(message: Message):
     text = message.text.strip()
     logging.info(f"Text message received from {user_id}: '{text}'")
 
-    is_admin = chat_id in ADMIN_CHAT_IDS
+    try:
+        is_admin = chat_id in ADMIN_CHAT_IDS
 
-    # 1. Handle Admin Commands first if user is admin
-    if is_admin:
-        # Check if it's a known reply keyboard button (handled elsewhere)
-        if text not in ['Menu 🍽️', 'Order Status 📊', 'Admin Panel ⚙️', 'Orders 📦']:
-             # Assume it's a text command for menu management or order viewing
-             handle_admin_text_commands(text, chat_id)
-             return # Stop further processing if it was an admin command
+        # 1. Handle Admin Commands first if user is admin
+        if is_admin:
+            # Check if it's a known reply keyboard button (handled elsewhere)
+            if text not in ['Menu 🍽️', 'Order Status 📊', 'Admin Panel ⚙️', 'Orders 📦']:
+                 # Assume it's a text command for menu management or order viewing
+                 handle_admin_text_commands(text, chat_id)
+                 return # Stop further processing if it was an admin command
 
-    # 2. Check time availability for non-admins for subsequent actions
-    if not is_admin and not is_bot_available_now():
-        # Don't send unavailable message if they just typed 'Cancel' or something innocuous
-        current_state_check = db_manager.get_session_state(user_id)
-        if current_state_check != 'initial': # Only block if in an active flow
-             unavailable_message(chat_id)
+        # 2. Check time availability for non-admins for subsequent actions
+        if not is_admin and not is_bot_available_now():
+            # Don't send unavailable message if they just typed 'Cancel' or something innocuous
+            current_state_check = db_manager.get_session_state(user_id)
+            if current_state_check != 'initial': # Only block if in an active flow
+                 unavailable_message(chat_id)
+                 return
+
+        # 3. Check user state for expected inputs (phone, quantity)
+        current_state = db_manager.get_session_state(user_id)
+        current_order_id = db_manager.get_session_order_id(user_id)
+
+        # Handle 'Cancel Order ❌' text input from reply keyboard
+        if text == 'Cancel Order ❌':
+             if current_order_id:
+                 db_manager.update_order_status(current_order_id, 'cancelled')
+                 db_manager.set_session_state(user_id, 'initial', None)
+                 send_telegram_message(chat_id, "❌ Order cancelled.", reply_markup=ReplyKeyboardRemove())
+                 send_telegram_message(chat_id, "Tap 'Menu 🍽️' to start again.", reply_markup=get_main_reply_keyboard())
+             else:
+                 send_telegram_message(chat_id, "No active order to cancel.", reply_markup=ReplyKeyboardRemove())
+                 send_telegram_message(chat_id, "Tap 'Menu 🍽️' to start.", reply_markup=get_main_reply_keyboard())
              return
 
-    # 3. Check user state for expected inputs (phone, quantity)
-    current_state = db_manager.get_session_state(user_id)
-    current_order_id = db_manager.get_session_order_id(user_id)
+        # Awaiting Phone Number
+        if current_state == 'awaiting_phone_number':
+            # Basic validation (adjust regex as needed)
+            # Allows optional + and requires 7-15 digits
+            phone_match = re.fullmatch(r'\+?\d{7,15}', text)
+            if not phone_match:
+                send_telegram_message(chat_id, "❌ Invalid format. Please enter phone number (e.g., `+919876543210` or `9876543210`).", parse_mode='Markdown')
+                # Re-send prompt with keyboard
+                prompt_for_phone_number(user_id, chat_id)
+                return
 
-    # Handle 'Cancel Order ❌' text input from reply keyboard
-    if text == 'Cancel Order ❌':
-         if current_order_id:
-             db_manager.update_order_status(current_order_id, 'cancelled')
-             db_manager.set_session_state(user_id, 'initial', None)
-             send_telegram_message(chat_id, "❌ Order cancelled.", reply_markup=ReplyKeyboardRemove())
-             send_telegram_message(chat_id, "Tap 'Menu 🍽️' to start again.", reply_markup=get_main_reply_keyboard())
-         else:
-             send_telegram_message(chat_id, "No active order to cancel.", reply_markup=ReplyKeyboardRemove())
-             send_telegram_message(chat_id, "Tap 'Menu 🍽️' to start.", reply_markup=get_main_reply_keyboard())
-         return
+            phone_number = text
+            logging.info(f"Phone number '{phone_number}' received from user {user_id}.")
+            db_manager.update_user_phone(user_id, phone_number)
 
-    # Awaiting Phone Number
-    if current_state == 'awaiting_phone_number':
-        # Basic validation (adjust regex as needed)
-        # Allows optional + and requires 7-15 digits
-        phone_match = re.fullmatch(r'\+?\d{7,15}', text)
-        if not phone_match:
-            send_telegram_message(chat_id, "❌ Invalid format. Please enter phone number (e.g., `+919876543210` or `9876543210`).", parse_mode='Markdown')
-            # Re-send prompt with keyboard
-            prompt_for_phone_number(user_id, chat_id)
+            # Remove the reply keyboard immediately
+            send_telegram_message(chat_id, f"✅ Phone number saved: {phone_number}", reply_markup=ReplyKeyboardRemove())
+
+            # CRITICAL: Now trigger the final confirmation display again
+            # Fetch the order details needed for confirmation
+            order = db_manager.get_order_details(current_order_id)
+            if order:
+                 service_type = order.get('service_type', 'N/A')
+                 items_list = db_manager.parse_order_items(order.get('items'))
+                 food_summary = "\n".join([f"• {item.get('name', '?').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})" for item in items_list])
+                 contact = phone_number # Use the number just entered
+                 total_amount = order.get("total_amount")
+                 total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
+
+                 confirmation_msg = (
+                      f"📝 *Final Confirmation* \\(Order \\#{current_order_id}\\)\n\n"
+                      f"*Contact:* `{escape_markdown(contact)}`\n"
+                      f"*Service:* {escape_markdown(service_type.replace('_', ' ').title())}\n"
+                      f"*Total:* ₹{escape_markdown(total_amount_str)}\n\n"
+                      f"*Items:*\n{food_summary}\n\n"
+                      f"Confirm to proceed to payment\\."
+                 )
+                 db_manager.set_session_state(user_id, 'confirming_order', current_order_id)
+                 # Send the final confirmation with inline buttons as a NEW message
+                 send_telegram_message(chat_id, confirmation_msg,
+                                       reply_markup=get_confirmation_inline_keyboard(), parse_mode='MarkdownV2')
+            else:
+                 logging.error(f"Order {current_order_id} not found after phone entry for user {user_id}.")
+                 send_telegram_message(chat_id, "❌ Error retrieving order details. Please start over.",
+                                       reply_markup=get_main_reply_keyboard())
+                 db_manager.set_session_state(user_id, 'initial', None)
             return
 
-        phone_number = text
-        logging.info(f"Phone number '{phone_number}' received from user {user_id}.")
-        db_manager.update_user_phone(user_id, phone_number)
+        # Awaiting Typed Quantity
+        elif current_state.startswith('awaiting_typed_quantity_'):
+            try:
+                quantity = int(text)
+                if quantity <= 0: raise ValueError("Quantity must be positive.")
 
-        # Remove the reply keyboard immediately
-        send_telegram_message(chat_id, f"✅ Phone number saved: {phone_number}", reply_markup=ReplyKeyboardRemove())
+                item_id = int(current_state.split('_')[-1]) # Extract item_id from state
+                logging.info(f"Typed quantity {quantity} received for item {item_id} from user {user_id}.")
 
-        # CRITICAL: Now trigger the final confirmation display again
-        # Fetch the order details needed for confirmation
-        order = db_manager.get_order_details(current_order_id)
-        if order:
-             service_type = order.get('service_type', 'N/A')
-             items_list = db_manager.parse_order_items(order.get('items'))
-             food_summary = "\n".join([f"• {item.get('name', '?').title()} x {item.get('qty', 1)} (₹{item.get('price', 0.0):.2f})" for item in items_list])
-             contact = phone_number # Use the number just entered
-             total_amount = order.get("total_amount")
-             total_amount_str = f"{total_amount:.2f}" if total_amount is not None else "N/A"
+                # Add item to cart - this function sends the next step message
+                # Pass message_id=None because we need to send a new message
+                # after the user's typed quantity message.
+                add_item_to_cart_and_prompt(user_id, chat_id, message_id=None, item_id=item_id, quantity=quantity)
 
-             confirmation_msg = (
-                  f"📝 *Final Confirmation* \\(Order \\#{current_order_id}\\)\n\n"
-                  f"*Contact:* `{escape_markdown(contact)}`\n"
-                  f"*Service:* {escape_markdown(service_type.replace('_', ' ').title())}\n"
-                  f"*Total:* ₹{escape_markdown(total_amount_str)}\n\n"
-                  f"*Items:*\n{food_summary}\n\n"
-                  f"Confirm to proceed to payment\\."
-             )
-             db_manager.set_session_state(user_id, 'confirming_order', current_order_id)
-             # Send the final confirmation with inline buttons as a NEW message
-             send_telegram_message(chat_id, confirmation_msg,
-                                   reply_markup=get_confirmation_inline_keyboard(), parse_mode='MarkdownV2')
+            except (ValueError, IndexError, TypeError):
+                 logging.warning(f"Invalid typed quantity '{text}' received from user {user_id}.")
+                 send_telegram_message(chat_id, "❌ Invalid quantity. Please type a whole number greater than 0.")
+                 # Keep user in the same state to allow re-entry
+            return
+
+        # 4. Fallback for unexpected text
         else:
-             logging.error(f"Order {current_order_id} not found after phone entry for user {user_id}.")
-             send_telegram_message(chat_id, "❌ Error retrieving order details. Please start over.",
-                                   reply_markup=get_main_reply_keyboard())
-             db_manager.set_session_state(user_id, 'initial', None)
-        return
+            # Ignore if it looks like a command meant for admin but sent by user
+            if not is_admin and text.lower() in ['add', 'update', 'delete', '/today', 'today', '/orders', 'orders']:
+                 logging.info(f"Ignoring potential admin command '{text}' from non-admin user {user_id}.")
+                 # Send a generic help message
+                 main_keyboard = get_main_reply_keyboard()
+                 send_telegram_message(chat_id, "Please use the buttons below or type /start.", reply_markup=main_keyboard)
+                 return
 
-    # Awaiting Typed Quantity
-    elif current_state.startswith('awaiting_typed_quantity_'):
-        try:
-            quantity = int(text)
-            if quantity <= 0: raise ValueError("Quantity must be positive.")
+            # Default response if text doesn't match any expected input
+            logging.info(f"Unhandled text message from {user_id}: '{text}' in state: {current_state}")
+            main_keyboard = get_admin_reply_keyboard() if is_admin else get_main_reply_keyboard()
+            send_telegram_message(chat_id, "Sorry, I didn't understand that. Please use the buttons or /start.", reply_markup=main_keyboard)
 
-            item_id = int(current_state.split('_')[-1]) # Extract item_id from state
-            logging.info(f"Typed quantity {quantity} received for item {item_id} from user {user_id}.")
-
-            # Add item to cart - this function sends the next step message
-            # Pass message_id=None because we need to send a new message
-            # after the user's typed quantity message.
-            add_item_to_cart_and_prompt(user_id, chat_id, message_id=None, item_id=item_id, quantity=quantity)
-
-        except (ValueError, IndexError, TypeError):
-             logging.warning(f"Invalid typed quantity '{text}' received from user {user_id}.")
-             send_telegram_message(chat_id, "❌ Invalid quantity. Please type a whole number greater than 0.")
-             # Keep user in the same state to allow re-entry
-        return
-
-    # 4. Fallback for unexpected text
-    else:
-        # Ignore if it looks like a command meant for admin but sent by user
-        if not is_admin and text.lower() in ['add', 'update', 'delete', '/today', 'today', '/orders', 'orders']:
-             logging.info(f"Ignoring potential admin command '{text}' from non-admin user {user_id}.")
-             # Send a generic help message
-             main_keyboard = get_main_reply_keyboard()
-             send_telegram_message(chat_id, "Please use the buttons below or type /start.", reply_markup=main_keyboard)
-             return
-
-        # Default response if text doesn't match any expected input
-        logging.info(f"Unhandled text message from {user_id}: '{text}' in state: {current_state}")
-        main_keyboard = get_admin_reply_keyboard() if is_admin else get_main_reply_keyboard()
-        send_telegram_message(chat_id, "Sorry, I didn't understand that. Please use the buttons or /start.", reply_markup=main_keyboard)
+    except Exception as e:
+         # Top-level catch block for text message handler
+         logging.error(f"[handle_text_messages] Unexpected error processing text '{text}' for user {user_id}: {e}")
+         traceback.print_exc()
+         # Send a generic error reply
+         send_telegram_message(chat_id, "Sorry, an internal error occurred. Please try /start again.")
 
 
 # --- TELEGRAM BOT WEBHOOK ENTRY POINT for Vercel ---
@@ -1789,16 +1805,11 @@ def webhook():
             update = telebot.types.Update.de_json(json_string)
             logging.info("Webhook received update.") # Basic log
 
-            # --- DEBUGGING VERSION: Process directly ---
-            logging.debug("Processing update directly (no thread)...")
-            bot.process_new_updates([update])
-            logging.debug("Update processing finished.")
-            # --- END DEBUGGING VERSION ---
-
-            # --- PRODUCTION VERSION (Use this after debugging) ---
-            # logging.debug("Processing update in background thread...")
-            # threading.Thread(target=bot.process_new_updates, args=[[update]]).start()
-            # logging.debug("Thread started, returning OK to Telegram.")
+            # --- PRODUCTION VERSION (Threaded) ---
+            # This is the correct way for Vercel to avoid timeouts
+            logging.debug("Processing update in background thread...")
+            threading.Thread(target=bot.process_new_updates, args=[[update]]).start()
+            logging.debug("Thread started, returning OK to Telegram.")
             # --- END PRODUCTION VERSION ---
 
             return 'OK', 200 # Always return 200 OK quickly to Telegram
@@ -1808,7 +1819,7 @@ def webhook():
             return 'Bad Request', 400
         except Exception as e:
             # Catch errors during direct processing (in debugging version)
-            logging.error(f"❌ CRASH IN WEBHOOK HANDLER processing update: {e}")
+            logging.error(f"❌ CRASH IN WEBHOOK HANDLER (e.g., JSON parsing): {e}")
             traceback.print_exc()
             # Return 500 to indicate an error, Telegram might retry
             return 'Internal Server Error', 500

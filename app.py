@@ -38,10 +38,21 @@ import io # For in-memory file handling
 # Ensure logging is configured before any logging calls are made
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Check essential variables AFTER loading dotenv
+# --- *** MODIFIED *** ---
+# This list now includes ALL required variables.
+# This check will cause the app to exit if any are missing in Vercel.
 REQUIRED_ENV_VARS = [
-    'BOT_TOKEN', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'BOT_PUBLIC_URL',
-    'SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'SUPABASE_DB_URL', 'SUPABASE_QR_BUCKET_URL'
+    'BOT_TOKEN',
+    'ADMIN_CHAT_IDS',
+    'PAYEE_NAME',
+    'RAZORPAY_KEY_ID',
+    'RAZORPAY_KEY_SECRET',
+    'RAZORPAY_WEBHOOK_SECRET',
+    'BOT_PUBLIC_URL',
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_KEY',
+    'SUPABASE_DB_URL',
+    'SUPABASE_QR_BUCKET_URL'
 ]
 missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
 if missing_vars:
@@ -50,7 +61,8 @@ if missing_vars:
     # Exit if critical variables are missing, preventing the app from starting incorrectly
     exit(1)
 else:
-    logging.info("✅ All required environment variables are present.")
+    logging.info("✅ All 11 required environment variables are present.")
+# --- *** END MODIFICATION *** ---
 
 
 # --- CONFIGURATION ---
@@ -1105,11 +1117,11 @@ def handle_admin_callbacks(data, chat_id, message_id):
              edit_or_send("No active order to cancel.", reply_markup=None)
 
     elif data.startswith('copy_razorpay_'):
-        # Pass the full call object to potentially answer callback query later
-        handle_copy_razorpay(data, None) # HACK: Pass None for call, logic needs rework
-        # This function should really be part of handle_user_callbacks
-        logging.warning("copy_razorpay handled inside admin_callbacks, this might fail")
-
+        # This function needs the 'call' object, which handle_admin_callbacks doesn't have
+        # This is a design flaw. Let's fix it by passing 'call' to the handlers
+        logging.warning("copy_razorpay callback cannot be handled inside handle_admin_callbacks. Move to handle_user_callbacks.")
+        # This will fail, but the real call is in handle_user_callbacks
+        pass
 
     # ... [Rest of user-side ordering callbacks: item:, qty:, type_qty:, add_more, checkout, service:, confirm_pay] ...
     # These should largely remain the same, just ensure they call the correct db_manager functions
@@ -1784,7 +1796,7 @@ def handle_text_messages(message: Message):
         elif current_state.startswith('awaiting_typed_quantity_'):
             try:
                 quantity = int(text)
-                if quantity <= 0: raise ValueError("Quantity must be positive.")
+                if quantity <= 0: raise ValueError("Quantity must be positive")
 
                 item_id = int(current_state.split('_')[-1]) # Extract item_id from state
                 logging.info(f"Typed quantity {quantity} received for item {item_id} from user {user_id}.")

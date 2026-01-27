@@ -404,7 +404,7 @@ def handle_checkout(chat_id, conn):
     order_id = db_manager.create_order(user['phone_number'], cart, total, user_id=chat_id, conn=conn)
     
     if order_id:
-        links, _ = generate_razorpay_payment_link(order_id, total)
+        links, _ = generate_razorpay_payment_link(order_id, total, user['phone_number'])
         if links:
              db_manager.update_order_status(order_id, 'payment_pending', conn=conn)
              
@@ -600,12 +600,16 @@ def handle_razorpay_success_redirect():
 
 # --- PAYMENT HELPER FUNCTIONS ---
 
-def generate_razorpay_payment_link(order_id, amount):
+def generate_razorpay_payment_link(order_id, amount, phone_number):
     """Generates a Razorpay payment link."""
     try:
         if not RAZORPAY_KEY_ID: return None, None
         
         amount_paisa = int(amount * 100)
+        
+        # Ensure phone is valid E.164 or at least 10 digits
+        contact_str = str(phone_number).replace('+', '') 
+        if len(contact_str) < 10: contact_str = "9999999999" # Fallback dummy if invalid
         
         # Create Payment Link
         rzp_link = razorpay_client.payment_link.create({
@@ -617,7 +621,7 @@ def generate_razorpay_payment_link(order_id, amount):
             "description": f"Canteen Order #{order_id}",
             "customer": {
                 "name": PAYEE_NAME,
-                "contact": f"+{str(order_id)}", 
+                "contact": contact_str, 
             },
             "notify": {"sms": False, "email": False},
             "callback_url": f"{BOT_PUBLIC_URL}/payment_success",

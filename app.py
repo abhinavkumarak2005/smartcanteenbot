@@ -81,7 +81,13 @@ def telegram_webhook():
         
     try:
         json_string = request.get_data().decode('utf-8')
+        print(f"🔹 Webhook received: {json_string}") # DEBUG LOG
         update = Update.de_json(json_string)
+        
+        # Verify bot token matches (optional but good for debugging)
+        if not bot.token == TOKEN:
+             print("⚠️ Bot token mismatch in memory!")
+
         # Process synchronously
         bot.process_new_updates([update])
         return 'OK', 200
@@ -89,6 +95,20 @@ def telegram_webhook():
         print(f"❌ Telegram webhook error: {e}")
         traceback.print_exc()
         return 'Error', 500
+
+@app.route('/init_db', methods=['GET'])
+def init_db_route():
+    """Initialize database tables manually."""
+    try:
+        success = db_manager.create_tables()
+        if success:
+            # Also add default menu items if needed
+            db_manager.add_default_menu_items()
+            return "Database initialized successfully!", 200
+        else:
+            return "Failed to initialize database. Check logs.", 500
+    except Exception as e:
+        return f"Error: {e}", 500
 
 # --- RAZORPAY WEBHOOK ---
 @app.route('/razorpay/webhook', methods=['POST'])

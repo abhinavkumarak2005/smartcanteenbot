@@ -606,6 +606,10 @@ def generate_pickup_qr_code(order_id, student_phone, items_summary):
         else:
             return None, pickup_data['verification_code']
 
+    except Exception as e:
+        print(f"❌ Error generating pickup QR: {e}")
+        return None, None
+
 def generate_token_image(token_number, order_id, items, total, student_name):
     """Generate a digital token receipt image."""
     try:

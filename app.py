@@ -612,7 +612,7 @@ def generate_razorpay_payment_link(order_id, amount):
             "amount": amount_paisa,
             "currency": "INR",
             "accept_partial": False,
-            "expire_by": int((datetime.now() + timedelta(minutes=15)).timestamp()),
+            "expire_by": int((datetime.now() + timedelta(minutes=20)).timestamp()),
             "reference_id": str(order_id),
             "description": f"Canteen Order #{order_id}",
             "customer": {

@@ -96,19 +96,33 @@ def telegram_webhook():
         traceback.print_exc()
         return 'Error', 500
 
+import psycopg2 # Add this import for debugging
+
+# ... (imports)
+
 @app.route('/init_db', methods=['GET'])
 def init_db_route():
     """Initialize database tables manually."""
+    # 1. Debug Connection string (mask password)
+    db_url = os.getenv('SUPABASE_DB_URL', 'NOT_SET')
+    safe_url = db_url.split('@')[-1] if '@' in db_url else db_url
+    
+    try:
+        # 2. Try raw connection to get specific error
+        conn = psycopg2.connect(db_url)
+        conn.close()
+    except Exception as e:
+        return f"❌ BATABASE CONNECTION FAILED:\n\nError: {str(e)}\n\nURL (Host): ...@{safe_url}", 500
+
     try:
         success = db_manager.create_tables()
         if success:
-            # Also add default menu items if needed
             db_manager.add_default_menu_items()
-            return "Database initialized successfully!", 200
+            return "✅ Database initialized successfully!", 200
         else:
-            return "Failed to initialize database. Check logs.", 500
+            return "❌ Tables creation failed (Connection worked, but SQL failed). Check logs.", 500
     except Exception as e:
-        return f"Error: {e}", 500
+        return f"❌ Critical Error: {e}", 500
 
 # --- RAZORPAY WEBHOOK ---
 @app.route('/razorpay/webhook', methods=['POST'])

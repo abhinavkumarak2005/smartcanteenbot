@@ -253,7 +253,13 @@ def handle_registration_flow(message, telegram_id, text, conn):
 def handle_student_flow(msg, telegram_id, chat_id, user, conn=None):
     """Handle registered student messages."""
     # Detect commands regardless of state
-    if msg in ['/start', 'menu', 'hi', 'hello']:
+    if msg == '/start':
+        # Clear cart on fresh start
+        db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
+        show_menu(chat_id, conn)
+        return
+        
+    if msg in ['menu', 'hi', 'hello']:
         show_menu(chat_id, conn)
         return
 
@@ -262,25 +268,29 @@ def handle_student_flow(msg, telegram_id, chat_id, user, conn=None):
 
 def show_menu(chat_id, conn, message_to_edit=None):
     """Display Menu."""
-    items = db_manager.get_menu(conn=conn)
-    if not items:
-        bot.send_message(chat_id, "📋 Menu is currently empty.")
-        return
+    try:
+        items = db_manager.get_menu(conn=conn)
+        if not items:
+            bot.send_message(chat_id, "📋 Menu is currently empty.")
+            return
 
-    txt = "📋 *Today's Menu*\nSelect an item to order:"
-    keyboard = types.InlineKeyboardMarkup(row_width=1)
-    
-    for item in items:
-        btn_text = f"{item['name']}  -  ₹{item['price']}"
-        keyboard.add(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
-    
-    keyboard.add(types.InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"))
-    
-    if message_to_edit:
-        try: bot.edit_message_text(txt, chat_id, message_to_edit, reply_markup=keyboard, parse_mode='Markdown')
-        except: bot.send_message(chat_id, txt, reply_markup=keyboard, parse_mode='Markdown') # Fallback
-    else:
-        bot.send_message(chat_id, txt, reply_markup=keyboard, parse_mode='Markdown')
+        txt = "📋 *Today's Menu*\nSelect an item to order:"
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        
+        for item in items:
+            btn_text = f"{item['name']}  -  ₹{item['price']}"
+            keyboard.add(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
+        
+        keyboard.add(types.InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"))
+        
+        if message_to_edit:
+            try: bot.edit_message_text(txt, chat_id, message_to_edit, reply_markup=keyboard, parse_mode='Markdown')
+            except: bot.send_message(chat_id, txt, reply_markup=keyboard, parse_mode='Markdown')
+        else:
+            bot.send_message(chat_id, txt, reply_markup=keyboard, parse_mode='Markdown')
+    except Exception as e:
+        print(f"Show menu error: {e}")
+        bot.send_message(chat_id, "Error showing menu.")
 
 def ask_quantity(chat_id, item_id, message_id, conn):
     """Show Quantity Buttons for selected item."""
@@ -291,7 +301,7 @@ def ask_quantity(chat_id, item_id, message_id, conn):
     kb = types.InlineKeyboardMarkup(row_width=4)
     
     # Qty 1, 2, 3, 4
-    btns =Dictionary = []
+    btns = []
     for i in range(1, 5):
         btns.append(types.InlineKeyboardButton(str(i), callback_data=f"qty_{i}_{item_id}"))
     kb.add(*btns)
@@ -311,9 +321,9 @@ def show_mini_summary(chat_id, message_id, start_checkout=False, conn=None):
     
     txt = "✅ **Added to Cart!**\n\n**Current Items:**\n"
     for i in cart:
-         txt += f"• {i['name']} x{i['qty']}\n"
+         txt += f"• {i['name']} x{i['qty']} = ₹{i['price']*i['qty']}\n"
     
-    txt += "\nSelect an option:"
+    # txt += "\nSelect an option:" # Cleanup newlines
 
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🍔 Add More Items", callback_data="menu"))

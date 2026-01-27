@@ -166,6 +166,11 @@ def handle_callback_query(call, conn=None):
                 bot.send_message(chat_id, "Item Deleted.")
                 return
 
+            elif data == 'admin_add_help':
+                bot.answer_callback_query(call.id, "Cheatsheet")
+                bot.send_message(chat_id, "💡 **To add an item:**\nType the command:\n`add Name Price`\nExample: `add Burger 50`", parse_mode='Markdown')
+                return
+
 
         # Student Flow
         if data == 'menu':

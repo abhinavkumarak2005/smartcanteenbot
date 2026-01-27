@@ -107,22 +107,38 @@ def init_db_route():
     db_url = os.getenv('SUPABASE_DB_URL', 'NOT_SET')
     safe_url = db_url.split('@')[-1] if '@' in db_url else db_url
     
+@app.route('/init_db', methods=['GET'])
+def init_db_route():
+    """Initialize database tables manually."""
+    # Debug: Try to resolve DNS first to show user
+    db_url = os.getenv('SUPABASE_DB_URL', 'NOT_SET')
+    
+    debug_info = []
     try:
-        # 2. Try raw connection to get specific error
-        conn = psycopg2.connect(db_url)
-        conn.close()
+        from urllib.parse import urlparse
+        hostname = urlparse(db_url).hostname
+        ip = socket.gethostbyname(hostname)
+        debug_info.append(f"DNS IPv4: {ip}")
     except Exception as e:
-        return f"❌ BATABASE CONNECTION FAILED:\n\nError: {str(e)}\n\nURL (Host): ...@{safe_url}", 500
+        debug_info.append(f"DNS Error: {e}")
 
     try:
-        success = db_manager.create_tables()
-        if success:
-            db_manager.add_default_menu_items()
-            return "✅ Database initialized successfully!", 200
+        # Use our robust db_manager connection
+        conn = db_manager.create_connection()
+        if conn:
+            conn.close()
+            # If connection works, proceed to create tables
+            success = db_manager.create_tables()
+            if success:
+                db_manager.add_default_menu_items()
+                return f"✅ Database initialized successfully! <br>Debug Info: {', '.join(debug_info)}", 200
+            else:
+                return "❌ Tables creation failed (SQL Error). Check logs.", 500
         else:
-            return "❌ Tables creation failed (Connection worked, but SQL failed). Check logs.", 500
+             return f"❌ Connection Failed even with IPv4 fix. <br>Info: {', '.join(debug_info)}", 500
+             
     except Exception as e:
-        return f"❌ Critical Error: {e}", 500
+        return f"❌ Critical Error: {e} <br>Info: {', '.join(debug_info)}", 500
 
 # --- RAZORPAY WEBHOOK ---
 @app.route('/razorpay/webhook', methods=['POST'])

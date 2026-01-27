@@ -16,14 +16,33 @@ load_dotenv(dotenv_path=DOTENV_PATH)
 # Supabase PostgreSQL Connection URL
 SUPABASE_DB_URL = os.getenv('SUPABASE_DB_URL')
 
+import socket
+from urllib.parse import urlparse, urlunparse
+
 def create_connection():
-    """Create PostgreSQL database connection."""
+    """Create PostgreSQL database connection with forced IPv4 resolution."""
     try:
         if not SUPABASE_DB_URL:
-             # Fallback or error if not set
              print("❌ SUPABASE_DB_URL is not set.")
              return None
-        conn = psycopg2.connect(SUPABASE_DB_URL)
+        
+        # Parse the URL
+        parsed = urlparse(SUPABASE_DB_URL)
+        hostname = parsed.hostname
+        
+        # Resolve to IPv4 (AF_INET)
+        # Vercel/Supabase often fail on IPv6, so we force IPv4
+        try:
+            ipv4_address = socket.gethostbyname(hostname)
+            # Reconstruct URL with IP address
+            # We must keep the port and credentials
+            new_netloc = parsed.netloc.replace(hostname, ipv4_address)
+            final_url = urlunparse(parsed._replace(netloc=new_netloc))
+        except Exception as dns_error:
+            print(f"⚠️ DNS Resolution failed, trying original URL: {dns_error}")
+            final_url = SUPABASE_DB_URL
+
+        conn = psycopg2.connect(final_url)
         return conn
     except Exception as e:
         print(f"❌ Database connection error: {e}")

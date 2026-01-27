@@ -2,8 +2,8 @@ import os
 import sys
 import traceback
 from flask import Flask, request, jsonify
-from telebot import TeleBot, types, Update
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot import TeleBot, types
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, Update
 import threading
 import requests
 from PIL import Image, ImageDraw, ImageFont # Added PIL

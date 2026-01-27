@@ -85,7 +85,111 @@ def index():
         return f"<pre>{STARTUP_ERROR}</pre>", 500
     return "Telegram Canteen Bot is Running (Serverless)", 200
 
-# --- TELEGRAM WEBHOOK ---
+# --- HELPER FUNCTIONS ---
+# (Keep existing helpers...)
+
+# --- TELEGRAM HANDLERS (Manual call, no decorators needed for webhook) ---
+
+def handle_incoming_message(message):
+    """Manually handle incoming message to bypass Telebot dispatcher issues."""
+    try:
+        print(f"🔹 Processing message from {message.chat.id}: {message.text}") # DEBUG
+        incoming_msg = message.text.strip().lower() if message.text else ''
+        chat_id = message.chat.id
+        student_id = str(chat_id)
+
+        if chat_id in ADMIN_CHAT_IDS:
+            print(f"🔹 Routing to ADMIN flow for {chat_id}")
+            handle_admin_commands(incoming_msg, chat_id)
+        else:
+            print(f"🔹 Routing to STUDENT flow for {chat_id}")
+            handle_student_flow(incoming_msg, student_id, chat_id)
+            
+    except Exception as e:
+        print(f"❌ Handler Error: {e}")
+        traceback.print_exc()
+        try:
+            bot.send_message(message.chat.id, "❌ Error processing request.")
+        except: pass
+
+def handle_student_flow(msg, student_id, chat_id):
+    print(f"🔹 Student Flow: msg='{msg}', state={db_manager.get_session_state(student_id)}")
+    
+    # Simplified flow for brevity/compatibility
+    user_state = db_manager.get_session_state(student_id)
+    
+    if msg in ['menu', '/start', 'start']:
+        print("🔹 Executing MENU command")
+        db_manager.set_session_state(student_id, 'initial')
+        items = db_manager.get_menu()
+        print(f"🔹 Menu items fetched: {len(items)}")
+        
+        if not items:
+            txt = "📋 *Menu is empty.*"
+        else:
+            txt = "📋 *Menu:*\n\n" + "\n".join([f"ID {i['id']}: {i['name']} - ₹{i['price']}" for i in items])
+            txt += "\n\nReply `<id> <qty>` to order (e.g., `1 2`)."
+        
+        try:
+            bot.send_message(chat_id, txt, parse_mode='Markdown')
+            print("✅ Menu message sent")
+        except Exception as e:
+             print(f"❌ Failed to send menu: {e}")
+
+        db_manager.set_session_state(student_id, 'selecting_items')
+        
+    elif user_state == 'selecting_items':
+        try:
+            parts = msg.split()
+            item_id, qty = int(parts[0]), int(parts[1])
+            item = db_manager.get_menu_item(item_id)
+            if item:
+                total = item['price'] * qty
+                order_id = db_manager.create_order(student_id, [{'id':item['id'], 'name':item['name'], 'price':item['price'], 'qty':qty}], total)
+                db_manager.set_session_state(student_id, 'confirming_order', order_id)
+                bot.send_message(chat_id, f"Order: {item['name']} x {qty} = ₹{total}\nReply 'confirm' or 'cancel'.")
+            else:
+                bot.send_message(chat_id, "Invalid Item ID.")
+        except:
+            bot.send_message(chat_id, "Invalid format. Use `<id> <qty>`.")
+            
+    elif user_state == 'confirming_order':
+        if msg == 'confirm':
+            order_id = db_manager.get_session_order_id(student_id)
+            if order_id:
+                order = db_manager.get_order_details(order_id)
+                links, _ = generate_razorpay_payment_link(order_id, order['total_amount'])
+                if links:
+                    db_manager.update_order_status(order_id, 'payment_pending')
+                    bot.send_message(chat_id, "Tap to Pay:", reply_markup=create_payment_keyboard(links, order_id))
+                    db_manager.set_session_state(student_id, 'waiting_for_payment', order_id)
+                else:
+                    bot.send_message(chat_id, "Error generating payment link.")
+        else:
+             db_manager.set_session_state(student_id, 'initial')
+             bot.send_message(chat_id, "Cancelled.")
+
+    elif user_state == 'waiting_for_payment':
+         bot.send_message(chat_id, "Waiting for automatic confirmation...")
+
+def handle_admin_commands(msg, chat_id):
+    if msg.startswith('add '):
+        # add Name 100
+        parts = msg.split()
+        try:
+            price = float(parts[-1])
+            name = " ".join(parts[1:-1])
+            res = db_manager.add_menu_item(name, price)
+            bot.send_message(chat_id, res)
+        except:
+             bot.send_message(chat_id, "Usage: add Item Name Price")
+    elif msg == 'orders':
+        orders = db_manager.get_recent_orders(5)
+        txt = "\n".join([f"#{o['id']} {o['status']} ₹{o['total_amount']}" for o in orders])
+        bot.send_message(chat_id, txt or "No orders.")
+
+
+# --- TELEGRAM WEBHOOK (Moved to bottom to see handlers) ---
 @app.route(f'/{TOKEN}', methods=['POST'])
 def telegram_webhook():
     """Endpoint for Telegram updates."""
@@ -101,8 +205,13 @@ def telegram_webhook():
         if not bot.token == TOKEN:
              print("⚠️ Bot token mismatch in memory!")
 
-        # Process synchronously
-        bot.process_new_updates([update])
+        # Process synchronously - MANUAL ROUTING
+        # We skip bot.process_new_updates to ensure our code runs
+        if update.message:
+            handle_incoming_message(update.message)
+        else:
+            print("🔹 Update has no message content")
+
         return 'OK', 200
     except Exception as e:
         print(f"❌ Telegram webhook error: {e}")
@@ -351,89 +460,9 @@ def send_admin_notification(order_details, verification_code):
     except Exception as e:
         print(f"Notification error: {e}")
 
-# --- TELEGRAM HANDLERS (Same Logic, Different Wrapper) ---
-# We define them here, and `bot.process_new_updates` calls them.
+# --- HANDLERS MOVED UP ---
+# Code is now organized with handlers before webhook
 
-if bot:
-    @bot.message_handler(func=lambda message: True)
-    def handle_incoming_message(message: Message):
-        try:
-            incoming_msg = message.text.strip().lower() if message.text else ''
-            chat_id = message.chat.id
-            student_id = str(chat_id)
-
-            if chat_id in ADMIN_CHAT_IDS:
-                handle_admin_commands(incoming_msg, chat_id)
-            else:
-                handle_student_flow(incoming_msg, student_id, chat_id)
-        except Exception as e:
-            print(f"Handler error: {e}")
-            bot.send_message(message.chat.id, "❌ Error. Reply 'menu' to restart.")
-
-# (Include handle_student_flow and handle_admin_commands completely from user's code, 
-#  but ensuring they call db_manager functions correctly)
-
-def handle_student_flow(msg, student_id, chat_id):
-    # Simplified flow for brevity/compatibility
-    user_state = db_manager.get_session_state(student_id)
-    
-    if msg in ['menu', '/start', 'start']:
-        db_manager.set_session_state(student_id, 'initial')
-        items = db_manager.get_menu()
-        txt = "📋 *Menu:*\n\n" + "\n".join([f"ID {i['id']}: {i['name']} - ₹{i['price']}" for i in items])
-        txt += "\n\nReply `<id> <qty>` to order (e.g., `1 2`)."
-        bot.send_message(chat_id, txt, parse_mode='Markdown')
-        db_manager.set_session_state(student_id, 'selecting_items')
-        
-    elif user_state == 'selecting_items':
-        try:
-            parts = msg.split()
-            item_id, qty = int(parts[0]), int(parts[1])
-            item = db_manager.get_menu_item(item_id)
-            if item:
-                total = item['price'] * qty
-                order_id = db_manager.create_order(student_id, [{'id':item['id'], 'name':item['name'], 'price':item['price'], 'qty':qty}], total)
-                db_manager.set_session_state(student_id, 'confirming_order', order_id)
-                bot.send_message(chat_id, f"Order: {item['name']} x {qty} = ₹{total}\nReply 'confirm' or 'cancel'.")
-            else:
-                bot.send_message(chat_id, "Invalid Item ID.")
-        except:
-            bot.send_message(chat_id, "Invalid format. Use `<id> <qty>`.")
-            
-    elif user_state == 'confirming_order':
-        if msg == 'confirm':
-            order_id = db_manager.get_session_order_id(student_id)
-            if order_id:
-                order = db_manager.get_order_details(order_id)
-                links, _ = generate_razorpay_payment_link(order_id, order['total_amount'])
-                if links:
-                    db_manager.update_order_status(order_id, 'payment_pending')
-                    bot.send_message(chat_id, "Tap to Pay:", reply_markup=create_payment_keyboard(links, order_id))
-                    db_manager.set_session_state(student_id, 'waiting_for_payment', order_id)
-                else:
-                    bot.send_message(chat_id, "Error generating payment link.")
-        else:
-             db_manager.set_session_state(student_id, 'initial')
-             bot.send_message(chat_id, "Cancelled.")
-
-    elif user_state == 'waiting_for_payment':
-         bot.send_message(chat_id, "Waiting for automatic confirmation...")
-
-def handle_admin_commands(msg, chat_id):
-    if msg.startswith('add '):
-        # add Name 100
-        parts = msg.split()
-        try:
-            price = float(parts[-1])
-            name = " ".join(parts[1:-1])
-            res = db_manager.add_menu_item(name, price)
-            bot.send_message(chat_id, res)
-        except:
-             bot.send_message(chat_id, "Usage: add Item Name Price")
-    elif msg == 'orders':
-        orders = db_manager.get_recent_orders(5)
-        txt = "\n".join([f"#{o['id']} {o['status']} ₹{o['total_amount']}" for o in orders])
-        bot.send_message(chat_id, txt or "No orders.")
 
 # --- NO MAIN LOOP ---
 # Vercel handles the execution

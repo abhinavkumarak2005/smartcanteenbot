@@ -390,27 +390,7 @@ def add_to_cart(chat_id, item_id, qty, conn):
     # Optional: Pop-up notification
     # bot.answer_callback_query(...) handled in dispatcher
 
-def show_cart(chat_id, conn):
-    """Show Cart contents."""
-    cart = db_manager.get_session_data(chat_id, 'cart', conn=conn)
-    
-    if not cart:
-        bot.send_message(chat_id, "🛒 Your cart is empty.", reply_markup=main_menu_keyboard())
-        return
 
-    total = sum(i['price'] * i['qty'] for i in cart)
-    txt = "🛒 *Your Cart*\n\n"
-    for i in cart:
-        txt += f"• {i['name']} x{i['qty']} = ₹{i['price']*i['qty']}\n"
-    
-    txt += f"\n**Total: ₹{total}**"
-    
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("✅ Confirm & Pay", callback_data="checkout"))
-    keyboard.add(types.InlineKeyboardButton("❌ Clear Cart", callback_data="clear_cart"))
-    keyboard.add(types.InlineKeyboardButton("📋 Add More Items", callback_data="menu"))
-    
-    bot.send_message(chat_id, txt, reply_markup=keyboard, parse_mode='Markdown')
 
 def handle_checkout(chat_id, conn):
     """Create order and generate payment link."""

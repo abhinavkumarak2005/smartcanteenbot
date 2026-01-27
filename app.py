@@ -341,41 +341,6 @@ def process_order(chat_id, conn):
     pass # Replaced by handle_checkout
 
 
-def handle_admin_commands(msg, chat_id, conn=None):
-    print(f"🔹 Admin Command: {msg}")
-    
-    if msg in ['/start', 'start', 'help']:
-        txt = (
-            "👮‍♂️ *Admin Panel*\n\n"
-            "**Commands:**\n"
-            "• `orders` - View recent orders\n"
-            "• `add <Name> <Price>` - Add menu item\n"
-            "• `menu` - View student menu (Switch to student mode)\n"
-        )
-        bot.send_message(chat_id, txt, parse_mode='Markdown')
-        
-    elif msg == 'menu':
-        # Allow admin to test student flow
-        handle_student_flow(msg, str(chat_id), chat_id, conn=conn)
-        
-    elif msg.startswith('add '):
-        # add Name 100
-        parts = msg.split()
-        try:
-            price = float(parts[-1])
-            name = " ".join(parts[1:-1])
-            res = db_manager.add_menu_item(name, price, conn=conn) # Updated db_manager needs update too? I missed add_menu_item in multi_replace.
-            bot.send_message(chat_id, res)
-        except:
-             bot.send_message(chat_id, "Usage: add Item Name Price")
-    elif msg == 'orders':
-        orders = db_manager.get_recent_orders(5) # I forgot to update get_recent_orders in db_manager multi_replace. It will fall back to creating new conn, which is fine for admin.
-        txt = "\n".join([f"#{o['id']} {o['status']} ₹{o['total_amount']}" for o in orders])
-        bot.send_message(chat_id, txt or "No orders.")
-    else:
-        bot.send_message(chat_id, "Unknown Admin Command. Type /start for help.")
-
-
 # --- TELEGRAM WEBHOOK (Moved to bottom to see handlers) ---
 @app.route(f'/{TOKEN}', methods=['POST'])
 def telegram_webhook():

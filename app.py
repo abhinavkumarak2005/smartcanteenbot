@@ -217,9 +217,48 @@ def handle_callback_query(call, conn=None):
         print(f"❌ Callback Error: {e}")
         traceback.print_exc()
 
-# ... (Registration flow remains same) ...
+def handle_registration_flow(message, telegram_id, text, conn):
+    """Handle new user registration."""
+    # Check session state for registration step
+    # We can store step in 'registration_data' or 'state'
+    # Simplified: Use session state
+    state = db_manager.get_session_state(telegram_id, conn=conn)
+    
+    if state == 'initial':
+        # Prompt Name
+        bot.send_message(telegram_id, "👋 Welcome! It seems you are new here.\nPlease enter your **Full Name** to register:")
+        db_manager.set_session_state(telegram_id, 'reg_name', conn=conn)
+        
+    elif state == 'reg_name':
+        # Save Name, Prompt Phone
+        db_manager.set_session_data(telegram_id, 'registration_data', {'name': text}, conn=conn)
+        bot.send_message(telegram_id, f"Nice to meet you, {text}! 🤝\nNow, please share your **Mobile Number** (or type it):")
+        db_manager.set_session_state(telegram_id, 'reg_phone', conn=conn)
+        
+    elif state == 'reg_phone':
+        # Save Phone, Complete Registration
+        reg_data = db_manager.get_session_data(telegram_id, 'registration_data', conn=conn)
+        name = reg_data.get('name', 'Student')
+        phone = text
+        
+        success = db_manager.register_user(telegram_id, name, phone, conn=conn)
+        if success:
+            bot.send_message(telegram_id, "✅ Registration Complete! You can now order food.")
+            db_manager.set_session_state(telegram_id, 'menu', conn=conn)
+            show_menu(telegram_id, conn)
+        else:
+            bot.send_message(telegram_id, "❌ Error saving profile. Please try again.")
+            db_manager.set_session_state(telegram_id, 'initial', conn=conn)
 
-# ... (Student Flow Helpers) ...
+def handle_student_flow(msg, telegram_id, chat_id, user, conn=None):
+    """Handle registered student messages."""
+    # Detect commands regardless of state
+    if msg in ['/start', 'menu', 'hi', 'hello']:
+        show_menu(chat_id, conn)
+        return
+
+    # If text message comes in but we expect buttons, just show menu
+    bot.send_message(chat_id, "Please use the buttons below:", reply_markup=main_menu_keyboard())
 
 def show_menu(chat_id, conn, message_to_edit=None):
     """Display Menu."""

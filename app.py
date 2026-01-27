@@ -104,13 +104,6 @@ import psycopg2 # Add this import for debugging
 @app.route('/init_db', methods=['GET'])
 def init_db_route():
     """Initialize database tables manually."""
-    # 1. Debug Connection string (mask password)
-    db_url = os.getenv('SUPABASE_DB_URL', 'NOT_SET')
-    safe_url = db_url.split('@')[-1] if '@' in db_url else db_url
-    
-@app.route('/init_db', methods=['GET'])
-def init_db_route():
-    """Initialize database tables manually."""
     # Debug: Try to resolve DNS first to show user
     db_url = os.getenv('SUPABASE_DB_URL', 'NOT_SET')
     
@@ -118,7 +111,7 @@ def init_db_route():
     try:
         from urllib.parse import urlparse
         hostname = urlparse(db_url).hostname
-        ip = socket.gethostbyname(hostname)
+        ip = socket.gethostbyname(hostname) # Requires 'import socket' which is now present
         debug_info.append(f"DNS IPv4: {ip}")
     except Exception as e:
         debug_info.append(f"DNS Error: {e}")
@@ -131,10 +124,11 @@ def init_db_route():
             # If connection works, proceed to create tables
             success = db_manager.create_tables()
             if success:
+                # Add default items
                 db_manager.add_default_menu_items()
                 return f"✅ Database initialized successfully! <br>Debug Info: {', '.join(debug_info)}", 200
             else:
-                return "❌ Tables creation failed (SQL Error). Check logs.", 500
+                return f"❌ Tables creation failed (SQL Error). Check logs for details.<br>Info: {', '.join(debug_info)}", 500
         else:
              return f"❌ Connection Failed even with IPv4 fix. <br>Info: {', '.join(debug_info)}", 500
              

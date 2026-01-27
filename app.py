@@ -1,27 +1,37 @@
-# app.py - Main Telegram Canteen Bot Application (Serverless/Vercel Version)
-
 import os
-import db_manager
-import telebot
-from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, Update
-from dotenv import load_dotenv
-from pathlib import Path
-import qrcode
-import uuid
-import urllib.parse
-import json
-import time
-from datetime import datetime, timedelta
+import sys
 import traceback
-import logging
-import razorpay
 from flask import Flask, request, jsonify
-import io
-import socket # Required for DNS resolution debugging
 
-# --- PROJECT CONFIGURATION & ROBUST .ENV LOADING ---
-BASE_DIR = Path(__file__).resolve().parent
-DOTENV_PATH = BASE_DIR / '.env'
+# Global startup error capture
+STARTUP_ERROR = None
+
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    
+    # Load environment variables early
+    BASE_DIR = Path(__file__).resolve().parent
+    DOTENV_PATH = BASE_DIR / '.env'
+    load_dotenv(dotenv_path=DOTENV_PATH)
+
+    import db_manager
+    import telebot
+    from telebot.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, Update
+    import qrcode
+    import uuid
+    import urllib.parse
+    import json
+    import time
+    from datetime import datetime, timedelta
+    import logging
+    import razorpay
+    import io
+    import socket 
+except Exception as e:
+    STARTUP_ERROR = f"🔥 CRITICAL STARTUP ERROR:\n{traceback.format_exc()}"
+    print(STARTUP_ERROR) # Print to Vercel logs
+
 
 # Load environment variables
 load_dotenv(dotenv_path=DOTENV_PATH)
@@ -71,6 +81,8 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def index():
+    if STARTUP_ERROR:
+        return f"<pre>{STARTUP_ERROR}</pre>", 500
     return "Telegram Canteen Bot is Running (Serverless)", 200
 
 # --- TELEGRAM WEBHOOK ---

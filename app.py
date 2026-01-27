@@ -306,14 +306,18 @@ def ask_quantity(chat_id, item_id, message_id, conn):
     bot.edit_message_text(txt, chat_id, message_id, reply_markup=kb, parse_mode='Markdown')
 
 def show_mini_summary(chat_id, message_id, start_checkout=False, conn=None):
-    """Show 'Item Added' screen."""
+    """Show 'Item Added' screen with item list (No Total)."""
     cart = db_manager.get_session_data(chat_id, 'cart', conn=conn)
-    total = sum(i['price'] * i['qty'] for i in cart)
     
-    txt = f"✅ **Item Added!**\n\nCurrent Total: ₹{total}\nWhat next?"
+    txt = "✅ **Added to Cart!**\n\n**Current Items:**\n"
+    for i in cart:
+         txt += f"• {i['name']} x{i['qty']}\n"
+    
+    txt += "\nSelect an option:"
+
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🍔 Add More Items", callback_data="menu"))
-    kb.add(types.InlineKeyboardButton("💳 Checkout Now", callback_data="view_cart")) # Go to view cart first
+    kb.add(types.InlineKeyboardButton("💳 Checkout Now", callback_data="view_cart")) 
     
     bot.edit_message_text(txt, chat_id, message_id, reply_markup=kb, parse_mode='Markdown')
 
@@ -762,11 +766,6 @@ def generate_token_image(token_number, order_id, items, total, student_name):
     except Exception as e:
         print(f"❌ Error generating token image: {e}")
         return None
-
-    except Exception as e:
-        print(f"❌ Error generating pickup QR: {e}")
-        # Return at least the code so flow continues
-        return None, f"{order_id}CODE"
 
 def create_payment_keyboard(payment_links, order_id):
     try:

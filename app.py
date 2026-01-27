@@ -17,6 +17,7 @@ import logging
 import razorpay
 from flask import Flask, request, jsonify
 import io
+import socket # Required for DNS resolution debugging
 
 # --- PROJECT CONFIGURATION & ROBUST .ENV LOADING ---
 BASE_DIR = Path(__file__).resolve().parent

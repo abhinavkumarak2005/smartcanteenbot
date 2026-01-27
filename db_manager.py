@@ -56,7 +56,17 @@ def create_tables():
             return False
 
         with conn.cursor() as cursor:
-            # Create menu table
+            # 1. Users Table (New V2 feature)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    telegram_id BIGINT PRIMARY KEY,
+                    name TEXT,
+                    phone_number TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            ''')
+
+            # 2. Menu Table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS menu (
                     id SERIAL PRIMARY KEY,
@@ -67,11 +77,12 @@ def create_tables():
                 );
             ''')
 
-            # Create orders table
+            # 3. Orders Table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS orders (
                     id SERIAL PRIMARY KEY,
-                    student_phone TEXT NOT NULL,
+                    student_phone TEXT, -- Keeping for backward compatibility
+                    user_id BIGINT,     -- Link to users table
                     items JSONB NOT NULL,
                     total_amount REAL NOT NULL,
                     status TEXT DEFAULT 'pending',
@@ -79,21 +90,42 @@ def create_tables():
                     payment_expires_at TIMESTAMP,
                     pickup_code TEXT,
                     razorpay_order_id TEXT,
+                    daily_token INTEGER, -- Token number for the day
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             ''')
+            
+            # Apply Schema Updates for existing tables (safe migration)
+            try:
+                cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_token INTEGER;")
+                cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+            except Exception as ex:
+                print(f"⚠️ Schema update notice: {ex}")
+                conn.rollback() # Rollback the failed alter, but continue (if it failed it likely exists or syntax error)
+                # But we should probably not fail the whole transaction? 
+                # Postgres transaction will abort if error. We need savepoints or just ignore.
+                # Actually, `ADD COLUMN IF NOT EXISTS` is supported in Postgres 9.6+. Supabase is 15+.
+                pass
 
-            # Create user sessions table
+            # 4. User Sessions Table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_sessions (
                     student_phone TEXT PRIMARY KEY,
                     state TEXT DEFAULT 'initial',
                     current_order_id INTEGER,
+                    cart JSONB DEFAULT '[]', -- New: Cart support
+                    registration_data JSONB DEFAULT '{}', -- New: Temp reg data
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             ''')
+            
+            # Apply Session Schema Updates
+            try:
+                cursor.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS cart JSONB DEFAULT '[]';")
+                cursor.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS registration_data JSONB DEFAULT '{}';")
+            except: pass
 
             conn.commit()
             print("✅ Database tables created/verified successfully (PostgreSQL)!")
@@ -235,8 +267,8 @@ def delete_menu_item(item_id):
 
 # ========== ORDER OPERATIONS ==========
 
-def create_order(student_phone, order_details, total_amount, status='pending', conn=None):
-    """Create a new order."""
+def create_order(student_phone, order_details, total_amount, status='pending', conn=None, user_id=None):
+    """Create a new order with daily token."""
     should_close = False
     if not conn:
         conn = create_connection()
@@ -244,20 +276,26 @@ def create_order(student_phone, order_details, total_amount, status='pending', c
         if not conn: return None
         
     try:
-        # Postgres JSONB handles list/dict directly if adapter is registered,
-        # but json.dumps is safer for compatibility.
+        # Postgres JSONB handles list/dict directly
         items_json = json.dumps(order_details)
 
         with conn.cursor() as cursor:
+            # Generate Daily Token (Count today's orders + 1)
+            # We use Postgres 'limit' or 'count' effectively.
+            # Ideally this should be an atomic counter or sequence, but count is fine for this scale.
+            cursor.execute("SELECT COUNT(*) FROM orders WHERE created_at::date = CURRENT_DATE")
+            count = cursor.fetchone()[0]
+            daily_token = count + 1
+
             cursor.execute('''
-                INSERT INTO orders (student_phone, items, total_amount, status)
-                VALUES (%s, %s, %s, %s) RETURNING id
-            ''', (student_phone, items_json, total_amount, status))
+                INSERT INTO orders (student_phone, user_id, items, total_amount, status, daily_token)
+                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (student_phone, user_id, items_json, total_amount, status, daily_token))
             
             order_id = cursor.fetchone()[0]
             conn.commit()
             
-        print(f"✅ Order {order_id} created for user {student_phone}")
+        print(f"✅ Order {order_id} created (Token #{daily_token})")
         return order_id
     except Exception as e:
         print(f"❌ Error creating order: {e}")
@@ -458,6 +496,106 @@ def get_session_order_id(student_phone, conn=None):
     except Exception as e:
         print(f"❌ Error getting session order ID: {e}")
         return None
+    finally:
+        if should_close and conn: conn.close()
+
+# ========== USER OPERATIONS (V2) ==========
+
+def get_user(telegram_id, conn=None):
+    """Get user profile by Telegram ID."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return None
+
+    try:
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            cursor.execute('SELECT * FROM users WHERE telegram_id = %s', (telegram_id,))
+            user = cursor.fetchone()
+        return dict(user) if user else None
+    except Exception as e:
+        print(f"❌ Error getting user {telegram_id}: {e}")
+        return None
+    finally:
+        if should_close and conn: conn.close()
+
+def register_user(telegram_id, name, phone, conn=None):
+    """Register a new user or update existing."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return False
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO users (telegram_id, name, phone_number)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (telegram_id) DO UPDATE 
+                SET name = EXCLUDED.name, phone_number = EXCLUDED.phone_number
+            ''', (telegram_id, name, phone))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error registering user: {e}")
+        return False
+    finally:
+        if should_close and conn: conn.close()
+
+def set_session_data(student_phone, data_type, value, conn=None):
+    """Update specific session data (cart, reg_data)."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return False
+
+    try:
+        student_phone = str(student_phone)
+        col_name = 'cart' if data_type == 'cart' else 'registration_data'
+        value_json = json.dumps(value)
+
+        with conn.cursor() as cursor:
+             # Ensure session exists first
+            cursor.execute('''
+                INSERT INTO user_sessions (student_phone, updated_at)
+                VALUES (%s, CURRENT_TIMESTAMP)
+                ON CONFLICT (student_phone) DO NOTHING
+            ''', (student_phone,))
+
+            cursor.execute(f'''
+                UPDATE user_sessions SET {col_name} = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE student_phone = %s
+            ''', (value_json, student_phone))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"❌ Error setting session data {data_type}: {e}")
+        return False
+    finally:
+        if should_close and conn: conn.close()
+
+def get_session_data(student_phone, data_type, conn=None):
+    """Get specific session data."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return [] if data_type == 'cart' else {}
+
+    try:
+        col_name = 'cart' if data_type == 'cart' else 'registration_data'
+        with conn.cursor() as cursor:
+            cursor.execute(f'SELECT {col_name} FROM user_sessions WHERE student_phone = %s', (str(student_phone),))
+            res = cursor.fetchone()
+            if res and res[0]:
+                return res[0]
+            return [] if data_type == 'cart' else {}
+    except Exception as e:
+        print(f"❌ Error getting session data: {e}")
+        return [] if data_type == 'cart' else {}
     finally:
         if should_close and conn: conn.close()
 

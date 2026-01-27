@@ -123,7 +123,8 @@ def init_db_route():
     try:
         from urllib.parse import urlparse
         hostname = urlparse(db_url).hostname
-        ip = socket.gethostbyname(hostname) # Requires 'import socket' which is now present
+        debug_info.append(f"Target Host: {hostname}") # SHOW THIS TO USER
+        ip = socket.gethostbyname(hostname) 
         debug_info.append(f"DNS IPv4: {ip}")
     except Exception as e:
         debug_info.append(f"DNS Error: {e}")

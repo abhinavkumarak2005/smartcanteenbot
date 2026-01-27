@@ -86,9 +86,10 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def index():
+    print("🔹 V2.4 DEPLOYED: Fixes for Cart/Checkout/Price included")
     if STARTUP_ERROR:
         return f"<pre>{STARTUP_ERROR}</pre>", 500
-    return "Telegram Canteen Bot is Running (Serverless)", 200
+    return "Telegram Canteen Bot is Running (Serverless) V2.4", 200
 
 # --- HELPER FUNCTIONS ---
 # (Keep existing helpers...)

@@ -131,6 +131,10 @@ def handle_callback_query(call, conn=None):
     """Handle Inline Button Clicks."""
     try:
         print(f"🔹 Callback: {call.data} from {call.message.chat.id}")
+        # Acknowledge immediately to prevent spinner stuck
+        try: bot.answer_callback_query(call.id)
+        except: pass
+        
         chat_id = call.message.chat.id
         telegram_id = chat_id
         data = call.data

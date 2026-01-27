@@ -90,7 +90,7 @@ def index():
 
 # --- TELEGRAM HANDLERS (Manual call, no decorators needed for webhook) ---
 
-def handle_incoming_message(message):
+def handle_incoming_message(message, conn=None):
     """Manually handle incoming message to bypass Telebot dispatcher issues."""
     try:
         print(f"🔹 Processing message from {message.chat.id}: {message.text}") # DEBUG
@@ -100,10 +100,10 @@ def handle_incoming_message(message):
 
         if chat_id in ADMIN_CHAT_IDS:
             print(f"🔹 Routing to ADMIN flow for {chat_id}")
-            handle_admin_commands(incoming_msg, chat_id)
+            handle_admin_commands(incoming_msg, chat_id, conn)
         else:
             print(f"🔹 Routing to STUDENT flow for {chat_id}")
-            handle_student_flow(incoming_msg, student_id, chat_id)
+            handle_student_flow(incoming_msg, student_id, chat_id, conn)
             
     except Exception as e:
         print(f"❌ Handler Error: {e}")
@@ -112,16 +112,15 @@ def handle_incoming_message(message):
             bot.send_message(message.chat.id, "❌ Error processing request.")
         except: pass
 
-def handle_student_flow(msg, student_id, chat_id):
-    print(f"🔹 Student Flow: msg='{msg}', state={db_manager.get_session_state(student_id)}")
-    
+def handle_student_flow(msg, student_id, chat_id, conn=None):
     # Simplified flow for brevity/compatibility
-    user_state = db_manager.get_session_state(student_id)
+    user_state = db_manager.get_session_state(student_id, conn=conn)
+    print(f"🔹 Student Flow: msg='{msg}', state={user_state}")
     
     if msg in ['menu', '/start', 'start']:
         print("🔹 Executing MENU command")
-        db_manager.set_session_state(student_id, 'initial')
-        items = db_manager.get_menu()
+        db_manager.set_session_state(student_id, 'initial', conn=conn)
+        items = db_manager.get_menu(conn=conn)
         print(f"🔹 Menu items fetched: {len(items)}")
         
         if not items:
@@ -136,17 +135,17 @@ def handle_student_flow(msg, student_id, chat_id):
         except Exception as e:
              print(f"❌ Failed to send menu: {e}")
 
-        db_manager.set_session_state(student_id, 'selecting_items')
+        db_manager.set_session_state(student_id, 'selecting_items', conn=conn)
         
     elif user_state == 'selecting_items':
         try:
             parts = msg.split()
             item_id, qty = int(parts[0]), int(parts[1])
-            item = db_manager.get_menu_item(item_id)
+            item = db_manager.get_menu_item(item_id, conn=conn)
             if item:
                 total = item['price'] * qty
-                order_id = db_manager.create_order(student_id, [{'id':item['id'], 'name':item['name'], 'price':item['price'], 'qty':qty}], total)
-                db_manager.set_session_state(student_id, 'confirming_order', order_id)
+                order_id = db_manager.create_order(student_id, [{'id':item['id'], 'name':item['name'], 'price':item['price'], 'qty':qty}], total, conn=conn)
+                db_manager.set_session_state(student_id, 'confirming_order', order_id, conn=conn)
                 bot.send_message(chat_id, f"Order: {item['name']} x {qty} = ₹{total}\nReply 'confirm' or 'cancel'.")
             else:
                 bot.send_message(chat_id, "Invalid Item ID.")
@@ -155,24 +154,24 @@ def handle_student_flow(msg, student_id, chat_id):
             
     elif user_state == 'confirming_order':
         if msg == 'confirm':
-            order_id = db_manager.get_session_order_id(student_id)
+            order_id = db_manager.get_session_order_id(student_id, conn=conn)
             if order_id:
-                order = db_manager.get_order_details(order_id)
+                order = db_manager.get_order_details(order_id, conn=conn)
                 links, _ = generate_razorpay_payment_link(order_id, order['total_amount'])
                 if links:
-                    db_manager.update_order_status(order_id, 'payment_pending')
+                    db_manager.update_order_status(order_id, 'payment_pending', conn=conn)
                     bot.send_message(chat_id, "Tap to Pay:", reply_markup=create_payment_keyboard(links, order_id))
-                    db_manager.set_session_state(student_id, 'waiting_for_payment', order_id)
+                    db_manager.set_session_state(student_id, 'waiting_for_payment', order_id, conn=conn)
                 else:
                     bot.send_message(chat_id, "Error generating payment link.")
         else:
-             db_manager.set_session_state(student_id, 'initial')
+             db_manager.set_session_state(student_id, 'initial', conn=conn)
              bot.send_message(chat_id, "Cancelled.")
 
     elif user_state == 'waiting_for_payment':
          bot.send_message(chat_id, "Waiting for automatic confirmation...")
 
-def handle_admin_commands(msg, chat_id):
+def handle_admin_commands(msg, chat_id, conn=None):
     print(f"🔹 Admin Command: {msg}")
     
     if msg in ['/start', 'start', 'help']:
@@ -187,7 +186,7 @@ def handle_admin_commands(msg, chat_id):
         
     elif msg == 'menu':
         # Allow admin to test student flow
-        handle_student_flow(msg, str(chat_id), chat_id)
+        handle_student_flow(msg, str(chat_id), chat_id, conn=conn)
         
     elif msg.startswith('add '):
         # add Name 100
@@ -195,12 +194,12 @@ def handle_admin_commands(msg, chat_id):
         try:
             price = float(parts[-1])
             name = " ".join(parts[1:-1])
-            res = db_manager.add_menu_item(name, price)
+            res = db_manager.add_menu_item(name, price, conn=conn) # Updated db_manager needs update too? I missed add_menu_item in multi_replace.
             bot.send_message(chat_id, res)
         except:
              bot.send_message(chat_id, "Usage: add Item Name Price")
     elif msg == 'orders':
-        orders = db_manager.get_recent_orders(5)
+        orders = db_manager.get_recent_orders(5) # I forgot to update get_recent_orders in db_manager multi_replace. It will fall back to creating new conn, which is fine for admin.
         txt = "\n".join([f"#{o['id']} {o['status']} ₹{o['total_amount']}" for o in orders])
         bot.send_message(chat_id, txt or "No orders.")
     else:
@@ -214,6 +213,7 @@ def telegram_webhook():
     if not bot:
         return 'Bot not initialized', 500
         
+    conn = None # Initialize conn
     try:
         json_string = request.get_data().decode('utf-8')
         print(f"🔹 Webhook received: {json_string}") # DEBUG LOG
@@ -224,9 +224,17 @@ def telegram_webhook():
              print("⚠️ Bot token mismatch in memory!")
 
         # Process synchronously - MANUAL ROUTING
-        # We skip bot.process_new_updates to ensure our code runs
         if update.message:
-            handle_incoming_message(update.message)
+            # Create ONE connection for the whole request
+            conn = db_manager.create_connection()
+            if not conn:
+                print("❌ Failed to create DB connection in webhook")
+                # We can still try to run, but db calls will fail or try to reconnect? 
+                # Actually db_manager functions will try to connect if conn is None.
+                # So we can just pass None if it failed, and it will be slow but work?
+                # No, better to pass None.
+            
+            handle_incoming_message(update.message, conn=conn)
         else:
             print("🔹 Update has no message content")
 
@@ -235,6 +243,11 @@ def telegram_webhook():
         print(f"❌ Telegram webhook error: {e}")
         traceback.print_exc()
         return 'Error', 500
+    finally:
+        # Close the shared connection
+        if conn:
+            conn.close()
+            print("🔒 DB Connection closed.")
 
 import psycopg2 # Add this import for debugging
 

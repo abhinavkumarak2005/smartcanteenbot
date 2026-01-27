@@ -134,12 +134,17 @@ def add_default_menu_items():
 
 # ========== MENU OPERATIONS ==========
 
-def get_menu():
+# ========== MENU OPERATIONS ==========
+
+def get_menu(conn=None):
     """Get all available menu items."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return []
 
+    try:
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             cursor.execute('SELECT * FROM menu WHERE available = TRUE ORDER BY id')
             items = [dict(row) for row in cursor.fetchall()]
@@ -148,14 +153,17 @@ def get_menu():
         print(f"❌ Error getting menu: {e}")
         return []
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
-def get_menu_item(item_id):
+def get_menu_item(item_id, conn=None):
     """Get single menu item by ID."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return None
 
+    try:
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             cursor.execute('SELECT * FROM menu WHERE id = %s AND available = TRUE', (item_id,))
             item = cursor.fetchone()
@@ -164,7 +172,7 @@ def get_menu_item(item_id):
         print(f"❌ Error getting menu item {item_id}: {e}")
         return None
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
 def add_menu_item(name, price):
     """Add new menu item."""
@@ -227,12 +235,15 @@ def delete_menu_item(item_id):
 
 # ========== ORDER OPERATIONS ==========
 
-def create_order(student_phone, order_details, total_amount, status='pending'):
+def create_order(student_phone, order_details, total_amount, status='pending', conn=None):
     """Create a new order."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return None
         
+    try:
         # Postgres JSONB handles list/dict directly if adapter is registered,
         # but json.dumps is safer for compatibility.
         items_json = json.dumps(order_details)
@@ -252,14 +263,17 @@ def create_order(student_phone, order_details, total_amount, status='pending'):
         print(f"❌ Error creating order: {e}")
         return None
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
-def get_order_details(order_id):
+def get_order_details(order_id, conn=None):
     """Get order details by ID."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return None
 
+    try:
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             cursor.execute('SELECT * FROM orders WHERE id = %s', (order_id,))
             order = cursor.fetchone()
@@ -268,7 +282,7 @@ def get_order_details(order_id):
         print(f"❌ Error getting order details for {order_id}: {e}")
         return None
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
 def get_order_by_razorpay_order_id(razorpay_order_id):
     """Get order details by Razorpay Order ID."""
@@ -286,12 +300,15 @@ def get_order_by_razorpay_order_id(razorpay_order_id):
     finally:
         if conn: conn.close()
 
-def update_order_status(order_id, status):
+def update_order_status(order_id, status, conn=None):
     """Update order status."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return False
 
+    try:
         with conn.cursor() as cursor:
             cursor.execute('''
                 UPDATE orders SET status = %s, updated_at = CURRENT_TIMESTAMP 
@@ -303,7 +320,7 @@ def update_order_status(order_id, status):
         print(f"❌ Error updating order status: {e}")
         return False
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
 def update_order_razorpay_id(order_id, razorpay_id):
     """Update Razorpay Order ID."""
@@ -375,12 +392,15 @@ def parse_order_items(items_input):
 
 # ========== SESSION MANAGEMENT ==========
 
-def set_session_state(student_phone, state, order_id=None):
+def set_session_state(student_phone, state, order_id=None, conn=None):
     """Set user session state (Upsert)."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return False
         
+    try:
         student_phone = str(student_phone)
 
         with conn.cursor() as cursor:
@@ -398,14 +418,17 @@ def set_session_state(student_phone, state, order_id=None):
         print(f"❌ Error setting session state: {e}")
         return False
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
-def get_session_state(student_phone):
+def get_session_state(student_phone, conn=None):
     """Get user session state."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return 'initial'
 
+    try:
         student_phone = str(student_phone)
         with conn.cursor() as cursor:
             cursor.execute('SELECT state FROM user_sessions WHERE student_phone = %s', (student_phone,))
@@ -415,14 +438,17 @@ def get_session_state(student_phone):
         print(f"❌ Error getting session state: {e}")
         return 'initial'
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
-def get_session_order_id(student_phone):
+def get_session_order_id(student_phone, conn=None):
     """Get current order ID from session."""
-    try:
+    should_close = False
+    if not conn:
         conn = create_connection()
+        should_close = True
         if not conn: return None
         
+    try:
         student_phone = str(student_phone)
 
         with conn.cursor() as cursor:
@@ -433,7 +459,7 @@ def get_session_order_id(student_phone):
         print(f"❌ Error getting session order ID: {e}")
         return None
     finally:
-        if conn: conn.close()
+        if should_close and conn: conn.close()
 
 # ========== STATISTICS & CLEANUP ==========
 

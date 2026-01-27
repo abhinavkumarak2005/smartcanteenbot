@@ -173,7 +173,23 @@ def handle_student_flow(msg, student_id, chat_id):
          bot.send_message(chat_id, "Waiting for automatic confirmation...")
 
 def handle_admin_commands(msg, chat_id):
-    if msg.startswith('add '):
+    print(f"🔹 Admin Command: {msg}")
+    
+    if msg in ['/start', 'start', 'help']:
+        txt = (
+            "👮‍♂️ *Admin Panel*\n\n"
+            "**Commands:**\n"
+            "• `orders` - View recent orders\n"
+            "• `add <Name> <Price>` - Add menu item\n"
+            "• `menu` - View student menu (Switch to student mode)\n"
+        )
+        bot.send_message(chat_id, txt, parse_mode='Markdown')
+        
+    elif msg == 'menu':
+        # Allow admin to test student flow
+        handle_student_flow(msg, str(chat_id), chat_id)
+        
+    elif msg.startswith('add '):
         # add Name 100
         parts = msg.split()
         try:
@@ -187,6 +203,8 @@ def handle_admin_commands(msg, chat_id):
         orders = db_manager.get_recent_orders(5)
         txt = "\n".join([f"#{o['id']} {o['status']} ₹{o['total_amount']}" for o in orders])
         bot.send_message(chat_id, txt or "No orders.")
+    else:
+        bot.send_message(chat_id, "Unknown Admin Command. Type /start for help.")
 
 
 # --- TELEGRAM WEBHOOK (Moved to bottom to see handlers) ---

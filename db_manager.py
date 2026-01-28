@@ -473,6 +473,7 @@ def set_session_state(student_phone, state, order_id=None, conn=None):
         return True
     except Exception as e:
         print(f"❌ Error setting session state: {e}")
+        if conn: conn.rollback()
         return False
     finally:
         if should_close and conn: conn.close()
@@ -493,6 +494,7 @@ def get_session_state(student_phone, conn=None):
         return result[0] if result else 'initial'
     except Exception as e:
         print(f"❌ Error getting session state: {e}")
+        if conn: conn.rollback()
         return 'initial'
     finally:
         if should_close and conn: conn.close()
@@ -541,6 +543,7 @@ def get_user(telegram_id, conn=None):
         return dict(user) if user else None
     except Exception as e:
         print(f"❌ Error getting user {telegram_id}: {e}")
+        if conn: conn.rollback()
         return None
     finally:
         if should_close and conn: conn.close()
@@ -568,6 +571,7 @@ def register_user(telegram_id, name, phone, conn=None):
         return True
     except Exception as e:
         print(f"❌ Error registering user: {e}")
+        if conn: conn.rollback()
         return False
     finally:
         if should_close and conn: conn.close()
@@ -673,6 +677,7 @@ def get_setting(key, default=None, conn=None):
         return res[0] if res else default
     except Exception as e:
         print(f"❌ Error getting {key}: {e}")
+        if conn: conn.rollback() # Important: Rollback to save connection
         return default
     finally:
         if should_close and conn: conn.close()

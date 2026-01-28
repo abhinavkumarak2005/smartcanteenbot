@@ -461,6 +461,7 @@ def set_session_state(student_phone, state, order_id=None, conn=None):
                               updated_at = EXCLUDED.updated_at
             ''', (student_phone, state, order_id))
             conn.commit()
+            print(f"✅ State updated for {student_phone}: {state}")
         return True
     except Exception as e:
         print(f"❌ Error setting session state: {e}")
@@ -520,9 +521,15 @@ def get_user(telegram_id, conn=None):
         if not conn: return None
 
     try:
+        # Cast to int to ensure correct Type
+        telegram_id = int(telegram_id)
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             cursor.execute('SELECT * FROM users WHERE telegram_id = %s', (telegram_id,))
             user = cursor.fetchone()
+        
+        if user: print(f"✅ User found: {telegram_id}")
+        else: print(f"⚠️ User NOT found: {telegram_id}")
+        
         return dict(user) if user else None
     except Exception as e:
         print(f"❌ Error getting user {telegram_id}: {e}")
@@ -539,6 +546,8 @@ def register_user(telegram_id, name, phone, conn=None):
         if not conn: return False
 
     try:
+        # Cast to int
+        telegram_id = int(telegram_id)
         with conn.cursor() as cursor:
             cursor.execute('''
                 INSERT INTO users (telegram_id, name, phone_number)
@@ -547,6 +556,7 @@ def register_user(telegram_id, name, phone, conn=None):
                 SET name = EXCLUDED.name, phone_number = EXCLUDED.phone_number
             ''', (telegram_id, name, phone))
             conn.commit()
+            print(f"✅ Registered user: {telegram_id} - {name}")
         return True
     except Exception as e:
         print(f"❌ Error registering user: {e}")

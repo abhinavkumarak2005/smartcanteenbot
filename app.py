@@ -628,27 +628,29 @@ def handle_razorpay_webhook():
                             if user: student_name = user.get('name', 'Student')
                         except: pass
 
-                    # 3. Generate Token Image
-                    try:
-                        token_img = generate_token_image(token_num, current_order_id, items_data, total_amt, student_name)
-                        
-                        caption = (
-                            f"🎉 **Payment Successful!**\n"
-                            f"Use this Token #{token_num} to collect your order.\n"
-                        )
-                        
-                        if token_img:
-                            bot.send_photo(student_chat_id, token_img, caption=caption, parse_mode='Markdown')
-                        else:
-                            bot.send_message(student_chat_id, caption, parse_mode='Markdown')
+                        # 3. Generate Token Image
+                        try:
+                            token_img = generate_token_image(token_num, current_order_id, items_data, total_amt, student_name)
                             
-                        send_admin_notification(order_details, f"Token #{token_num}")
-                        
-                    except Exception as inner_e:
-                        print(f"❌ Error sending token: {inner_e}")
-                        bot.send_message(student_chat_id, "✅ Paid! (Error generating token image, please show this msg).")
+                            caption = (
+                                f"🎉 **Payment Successful!**\n"
+                                f"Use this Token #{token_num} to collect your order.\n"
+                            )
+                            
+                            if token_img:
+                                bot.send_photo(student_chat_id, token_img, caption=caption, parse_mode='Markdown')
+                            else:
+                                bot.send_message(student_chat_id, caption, parse_mode='Markdown')
+                                
+                            send_admin_notification(order_details, f"Token #{token_num}")
+                            
+                        except Exception as inner_e:
+                            print(f"❌ Error sending token: {inner_e}")
+                            try:
+                                bot.send_message(student_chat_id, "✅ Paid! (Error generating token image, please show this msg).")
+                            except: pass
 
-                    print(f"✅ Order {current_order_id} processed.")
+                        print(f"✅ Order {current_order_id} processed.")
 
             return jsonify({'status': 'success'}), 200
 

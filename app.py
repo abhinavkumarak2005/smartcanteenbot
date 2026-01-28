@@ -226,7 +226,13 @@ def handle_callback_query(call, conn=None):
             elif data.startswith('mark_delivered_'):
                 order_id = int(data.split('_')[2])
                 db_manager.update_order_status(order_id, 'delivered', conn=conn)
-                try: bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=call.message.caption + "\n\n✅ **DELIVERED**")
+                
+                # Update Button to "Delivered"
+                kb = types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("✅ Delivered", callback_data="noop"))
+                
+                try: 
+                    bot.edit_message_reply_markup(chat_id=chat_id, message_id=msg_id, reply_markup=kb)
                 except: pass
                 
                 # Notify User
@@ -1237,11 +1243,12 @@ def generate_pdf_report(orders, date_str):
         # Table Header
         y = height - 120
         p.setFont("Helvetica-Bold", 10)
-        p.drawString(50, y, "ID")
-        p.drawString(100, y, "Customer")
-        p.drawString(250, y, "Items")
-        p.drawString(450, y, "Amount")
-        p.line(50, y-5, 500, y-5)
+        p.drawString(40, y, "Token")     # New
+        p.drawString(90, y, "Customer")
+        p.drawString(190, y, "Phone")    # New
+        p.drawString(290, y, "Items")
+        p.drawString(500, y, "Amt")
+        p.line(40, y-5, 550, y-5)
         y -= 25
         
         total_revenue = 0
@@ -1252,33 +1259,35 @@ def generate_pdf_report(orders, date_str):
                 p.showPage()
                 y = height - 50
                 
-            p.drawString(50, y, f"#{order.get('daily_token', order['id'])}")
+            # Token
+            try:
+                token_val = f"{order['created_at'].strftime('%b%d').upper()}-{order.get('daily_token', '?')}"
+            except: token_val = str(order['id'])
+            p.drawString(40, y, token_val)
             
-            # Get Name if available, else Phone
-            c_name = order.get('user_name') # Optimistic check if joined
-            if not c_name:
-                 # Try to fetch from user_id if needed, or just use phone
-                 # For efficiency in loop, we rely on stored data or just phone for now unless we do a join.
-                 # Let's try to get name from 'users' table if we have user_id, but doing it in loop is bad.
-                 # Better: Update get_daily_report_data to JOIN users.
-                 c_name = str(order.get('student_phone', 'Unknown'))
-
-            p.drawString(100, y, c_name[:15])
+            # Name
+            c_name = order.get('user_name') or "Unknown"
+            p.drawString(90, y, c_name[:15])
             
-            # Simplified items fetch (requires parsing)
+            # Phone
+            phone = str(order.get('student_phone', ''))
+            p.drawString(190, y, phone)
+            
+            # Items
             items = db_manager.parse_order_items(order['items'])
-            item_str = ", ".join([f"{i['name']} x{i['qty']}" for i in items])
-            if len(item_str) > 40: item_str = item_str[:37] + "..."
+            item_str = ", ".join([f"{i['name']}x{i['qty']}" for i in items])
+            if len(item_str) > 35: item_str = item_str[:32] + "..."
+            p.drawString(290, y, item_str)
             
-            p.drawString(250, y, item_str)
-            p.drawString(450, y, f"Rs. {order['total_amount']}")
+            # Amount
+            p.drawString(500, y, f"{order['total_amount']}")
             
             total_revenue += order['total_amount']
             y -= 20
             
-        p.line(50, y+10, 500, y+10)
+        p.line(40, y+10, 550, y+10)
         p.setFont("Helvetica-Bold", 12)
-        p.drawString(300, y-20, f"TOTAL REVENUE: Rs. {total_revenue}")
+        p.drawString(350, y-20, f"TOTAL: Rs. {total_revenue}")
         
         p.save()
         buffer.seek(0)
@@ -1299,8 +1308,7 @@ def send_admin_notification(order_details, verification_code):
         except: token_num = verification_code
 
         msg = (
-            f"🚨 *NEW ORDER PAID!* (#{order_details['id']})\n"
-            f"Token: `{token_num}`\n"
+            f"🚨 *NEW ORDER PAID!* ({token_num})\n"
             f"Amt: ₹{order_details['total_amount']}\n"
             f"User: {order_details.get('student_phone')}\n\n"
             f"{food_summary}"

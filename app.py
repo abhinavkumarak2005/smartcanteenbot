@@ -555,44 +555,45 @@ def handle_razorpay_webhook():
 
             if payload and payload.get('event') == 'payment.captured':
                 payment_entity = payload['payload']['payment']['entity']
-                
-                # Method 1: Try via Razorpay Order ID (if standard checkout)
-                # order_id_rzp = payment_entity.get('order_id')
-                
-                # Method 2: Extract from Description (Payment Link)
-                # Description format: "Canteen Order #{order_id}"
                 description = payment_entity.get('description', '')
-                current_order_id = None
+                print(f"🔹 Webhook Description: {description}")
                 
+                current_order_id = None
+                order_details = None
+
+                # Method 1: Extract from Description
                 if description and '#' in description:
                     try:
-                        current_order_id = int(description.split('#')[1])
+                        # Handle "Canteen Order #16" or "Canteen Order #16 - Extra"
+                        current_order_id = int(description.split('#')[1].strip().split()[0]) 
                         print(f"🔹 Extracted Order ID: {current_order_id}")
-                    except: 
-                        print("⚠️ Failed to extract ID from description")
+                    except Exception as e: 
+                        print(f"⚠️ Failed to extract ID from description: {e}")
                 
-                # Fallback: Try reference_id if available in notes
-                if not current_order_id:
-                     notes = payment_entity.get('notes', {})
-                     if 'reference_id' in notes:
-                         current_order_id = int(notes['reference_id'])
-                         print(f"🔹 Extracted ID from Notes: {current_order_id}")
-
                 if current_order_id:
-                    # Retrieve order using internal ID
-                    try:
+                     try:
                         order_details = db_manager.get_order(current_order_id)
-                    except AttributeError:
-                        print("❌ AttributeError: db_manager.get_order not found. Using get_order_details.")
+                     except: 
                         order_details = db_manager.get_order_details(current_order_id)
 
-                    if not order_details:
-                         print(f"❌ Order {current_order_id} NOT FOUND in DB.")
-                    else:
-                         print(f"🔹 Order Found. Status: {order_details.get('status')}")
+                # Method 2: Try via Payment Link ID (Robust Fallback)
+                if not order_details:
+                     plink_id = payment_entity.get('payment_link_id')
+                     # Also try 'order_id' just in case standard checkout was used
+                     rzp_order_id = payment_entity.get('order_id')
+                     
+                     if plink_id:
+                         print(f"🔹 Lookup by Payment Link ID: {plink_id}")
+                         order_details = db_manager.get_order_by_razorpay_order_id(plink_id)
+                     elif rzp_order_id:
+                         print(f"🔹 Lookup by Razorpay Order ID: {rzp_order_id}")
+                         order_details = db_manager.get_order_by_razorpay_order_id(rzp_order_id)
+                
+                if order_details:
+                     current_order_id = order_details['id']
+                     print(f"🔹 Order Found via DB. Status: {order_details.get('status')}")
                 else:
-                    print("❌ Could not determine Order ID from webhook.")
-                    order_details = None
+                     print("❌ Order NOT FOUND in DB.")
 
                 if order_details and order_details['status'] == 'payment_pending':
                     

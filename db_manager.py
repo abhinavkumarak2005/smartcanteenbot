@@ -452,16 +452,24 @@ def set_session_state(student_phone, state, order_id=None, conn=None):
         student_phone = str(student_phone)
 
         with conn.cursor() as cursor:
+            # Try UPDATE first
             cursor.execute('''
-                INSERT INTO user_sessions (student_phone, state, current_order_id, updated_at)
-                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (student_phone) 
-                DO UPDATE SET state = EXCLUDED.state, 
-                              current_order_id = EXCLUDED.current_order_id,
-                              updated_at = EXCLUDED.updated_at
-            ''', (student_phone, state, order_id))
+                UPDATE user_sessions 
+                SET state = %s, current_order_id = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE student_phone = %s
+            ''', (state, order_id, student_phone))
+            
+            if cursor.rowcount == 0:
+                # If no row updated, INSERT
+                cursor.execute('''
+                    INSERT INTO user_sessions (student_phone, state, current_order_id, updated_at)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ''', (student_phone, state, order_id))
+                print(f"✅ Session Created: {student_phone} -> {state}")
+            else:
+                print(f"✅ Session Updated: {student_phone} -> {state}")
+
             conn.commit()
-            print(f"✅ State updated for {student_phone}: {state}")
         return True
     except Exception as e:
         print(f"❌ Error setting session state: {e}")
@@ -578,17 +586,22 @@ def set_session_data(student_phone, data_type, value, conn=None):
         value_json = json.dumps(value)
 
         with conn.cursor() as cursor:
-             # Ensure session exists first
-            cursor.execute('''
-                INSERT INTO user_sessions (student_phone, updated_at)
-                VALUES (%s, CURRENT_TIMESTAMP)
-                ON CONFLICT (student_phone) DO NOTHING
-            ''', (student_phone,))
-
+            # Try UPDATE first
             cursor.execute(f'''
                 UPDATE user_sessions SET {col_name} = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE student_phone = %s
             ''', (value_json, student_phone))
+            
+            if cursor.rowcount == 0:
+                 # Insert if not exists
+                 cursor.execute(f'''
+                    INSERT INTO user_sessions (student_phone, {col_name}, updated_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                 ''', (student_phone, value_json))
+                 print(f"✅ Data Inserted ({data_type})")
+            else:
+                 print(f"✅ Data Updated ({data_type})")
+
             conn.commit()
             return True
     except Exception as e:

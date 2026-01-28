@@ -535,17 +535,34 @@ def handle_razorpay_webhook():
             payload = json.loads(raw_payload)
 
             if payload and payload.get('event') == 'payment.captured':
-                order_id_rzp = payload['payload']['order']['entity']['id']  # This works if created via Orders API. 
-                # If via Payment Links, the entity is a Payment, and it contains 'order_id' (which is the rzp_order_id).
-                # Wait, if we use Payment Links, the webhook payload is different.
-                # However, for now let's assume standard flow or that we can get the ID.
-                # If using proper checkout, we have reference.
+                payment_entity = payload['payload']['payment']['entity']
                 
-                # Retrieve order
-                order_details = db_manager.get_order_by_razorpay_order_id(order_id_rzp)
+                # Method 1: Try via Razorpay Order ID (if standard checkout)
+                # order_id_rzp = payment_entity.get('order_id')
                 
+                # Method 2: Extract from Description (Payment Link)
+                # Description format: "Canteen Order #{order_id}"
+                description = payment_entity.get('description', '')
+                current_order_id = None
+                
+                if description and '#' in description:
+                    try:
+                        current_order_id = int(description.split('#')[1])
+                    except: pass
+                
+                # Fallback: Try reference_id if available in notes
+                if not current_order_id:
+                     notes = payment_entity.get('notes', {})
+                     if 'reference_id' in notes:
+                         current_order_id = int(notes['reference_id'])
+
+                if current_order_id:
+                    # Retrieve order using internal ID
+                    order_details = db_manager.get_order(current_order_id) # Need simple get_order
+                else:
+                    order_details = None
+
                 if order_details and order_details['status'] == 'payment_pending':
-                    current_order_id = order_details['id']
                     
                     # 1. Update DB to Paid
                     db_manager.update_order_status(current_order_id, 'paid')

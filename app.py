@@ -1119,10 +1119,17 @@ from psycopg2.extras import DictCursor
 def handle_admin_commands(msg, chat_id, conn=None):
     """Admin Logic"""
     
+    # 0. Global Reset for Admins
+    if msg.lower() in ['/start', 'cancel', 'dashboard']:
+         db_manager.set_session_state(chat_id, 'initial', conn=conn)
+         # Fallthrough to show dashboard below (since state is now initial)
+         # We want to skip the state processing logic below
+    
     # 1. Check for State-Based Inputs (Custom Report / Settings)
     state = db_manager.get_session_state(chat_id, conn=conn)
     
-    if state == 'admin_report_custom':
+    # Ensure we don't process /start as a date even if state is somehow stuck
+    if state == 'admin_report_custom' and msg.lower() not in ['/start', 'cancel', 'dashboard']:
         # msg is the Date
         try:
             date_obj = datetime.strptime(msg, '%Y-%m-%d')

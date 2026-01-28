@@ -632,8 +632,14 @@ def handle_razorpay_webhook():
 
 @app.route('/payment_success', methods=['GET'])
 def handle_razorpay_success_redirect():
-    order_id = request.args.get('razorpay_order_id')
-    return f"<h1>Payment Successful!</h1><p>Please check Telegram for your Pickup Code (Ref: {order_id}).</p>"
+    # Try different params Razorpay might send
+    ref = request.args.get('razorpay_payment_link_reference_id') # Our Order ID
+    if not ref:
+        ref = request.args.get('razorpay_order_id')
+    if not ref:
+        ref = request.args.get('razorpay_payment_id')
+        
+    return f"<h1>Payment Successful! 🎉</h1><p>You can close this window.</p><p>Please check Telegram for your Token receipt (Ref: {ref if ref else 'Processed'}).</p>"
 
 
 # --- PAYMENT HELPER FUNCTIONS ---

@@ -410,13 +410,15 @@ def handle_checkout(chat_id, conn):
              
              # Keyboard with Pay Button
              kb = types.InlineKeyboardMarkup()
-             kb.add(types.InlineKeyboardButton("💳 Pay Now", url=links.get('short_url')))
-             # We might not get a callback for external link, so we rely on Razorpay Webhook
-             
-             bot.send_message(chat_id, f"✅ Order Created! (ID: {order_id})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
-             
-             # Clear Cart after successful order creation
-             db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
+             payment_url = links.get('razorpay_link')
+             if payment_url:
+                 kb.add(types.InlineKeyboardButton("💳 Pay Now", url=payment_url))
+                 bot.send_message(chat_id, f"✅ Order Created! (ID: {order_id})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
+                 
+                 # Clear Cart after successful order creation
+                 db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
+             else:
+                 bot.send_message(chat_id, "❌ Error: Payment link generation failed (empty URL).")
         else:
             bot.send_message(chat_id, "❌ Error generating payment link.")
 

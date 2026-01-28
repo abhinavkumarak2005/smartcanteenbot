@@ -127,6 +127,15 @@ def create_tables():
                 cursor.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS registration_data JSONB DEFAULT '{}';")
             except: pass
 
+            # 5. Settings Table (New V2 feature for Working Hours etc)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            ''')
+            
             conn.commit()
             print("✅ Database tables created/verified successfully (PostgreSQL)!")
             return True
@@ -136,6 +145,7 @@ def create_tables():
         return False
     finally:
         if conn: conn.close()
+
 
 def add_default_menu_items():
     """Add some default menu items if menu is empty."""
@@ -596,6 +606,51 @@ def get_session_data(student_phone, data_type, conn=None):
     except Exception as e:
         print(f"❌ Error getting session data: {e}")
         return [] if data_type == 'cart' else {}
+    finally:
+        if should_close and conn: conn.close()
+
+# ========== SETTINGS MANAGEMENT ==========
+
+def set_setting(key, value, conn=None):
+    """Set a global setting."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return False
+        
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (key) 
+                DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+            ''', (key, value))
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error setting {key}: {e}")
+        return False
+    finally:
+        if should_close and conn: conn.close()
+
+def get_setting(key, default=None, conn=None):
+    """Get a global setting."""
+    should_close = False
+    if not conn:
+        conn = create_connection()
+        should_close = True
+        if not conn: return default
+        
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT value FROM settings WHERE key = %s', (key,))
+            res = cursor.fetchone()
+        return res[0] if res else default
+    except Exception as e:
+        print(f"❌ Error getting {key}: {e}")
+        return default
     finally:
         if should_close and conn: conn.close()
 

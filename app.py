@@ -112,6 +112,18 @@ def handle_incoming_message(message, conn=None):
             handle_admin_commands(incoming_msg, chat_id, conn)
             return
 
+        # --- WORKING HOURS CHECK ---
+        open_time = db_manager.get_setting('open_time', '00:00', conn=conn)
+        close_time = db_manager.get_setting('close_time', '23:59', conn=conn)
+        
+        now = datetime.now()
+        current_time = now.strftime('%H:%M')
+        
+        # Simple string comparison works for HH:MM 24h format
+        if not (open_time <= current_time <= close_time):
+             bot.send_message(chat_id, f"🛑 **Canteen Closed**\nWe are open from {open_time} to {close_time}.")
+             return
+
         # Check Registration Status (V2)
         user = db_manager.get_user(telegram_id, conn=conn)
         
@@ -154,6 +166,11 @@ def handle_callback_query(call, conn=None):
                 else:
                     bot.send_message(chat_id, "❌ No data or error generating report.")
                 return
+            
+            elif data == 'admin_report_custom':
+                bot.send_message(chat_id, "📅 **Enter Date for Report**\nFormat: `YYYY-MM-DD`\nExample: `2024-01-25`", parse_mode='Markdown')
+                db_manager.set_session_state(chat_id, 'admin_report_custom', conn=conn)
+                return
 
             elif data == 'admin_menu':
                 items = db_manager.get_menu(conn=conn)
@@ -162,6 +179,21 @@ def handle_callback_query(call, conn=None):
                     kb.add(types.InlineKeyboardButton(f"❌ Delete {i['name']}", callback_data=f"del_{i['id']}"))
                 kb.add(types.InlineKeyboardButton("➕ Add New Item (Type 'add Name Price')", callback_data="admin_add_help"))
                 bot.send_message(chat_id, "🍔 **Menu Management**\nTap to delete:", reply_markup=kb, parse_mode='Markdown')
+                return
+
+            elif data == 'admin_settings':
+                # Show Settings Menu
+                kb = types.InlineKeyboardMarkup()
+                # working hours
+                kb.add(types.InlineKeyboardButton("⏰ Set Open Time", callback_data="set_open_time"))
+                kb.add(types.InlineKeyboardButton("🛑 Set Close Time", callback_data="set_close_time"))
+                bot.send_message(chat_id, "⚙️ **Settings**\nConfigure bot operations:", reply_markup=kb, parse_mode='Markdown')
+                return
+            
+            elif data in ['set_open_time', 'set_close_time']:
+                mode = 'open' if data == 'set_open_time' else 'close'
+                bot.send_message(chat_id, f"⏰ Enter **{mode.upper()} Time** (HH:MM 24hr format):\nExample: `09:00` or `18:00`", parse_mode='Markdown')
+                db_manager.set_session_state(chat_id, f'admin_set_{mode}', conn=conn)
                 return
 
             elif data.startswith('del_'):
@@ -174,6 +206,21 @@ def handle_callback_query(call, conn=None):
             elif data == 'admin_add_help':
                 bot.answer_callback_query(call.id, "Cheatsheet")
                 bot.send_message(chat_id, "💡 **To add an item:**\nType the command:\n`add Name Price`\nExample: `add Burger 50`", parse_mode='Markdown')
+                return
+            
+            elif data.startswith('mark_delivered_'):
+                order_id = int(data.split('_')[2])
+                db_manager.update_order_status(order_id, 'delivered', conn=conn)
+                try: bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=call.message.caption + "\n\n✅ **DELIVERED**")
+                except: pass
+                
+                # Notify User
+                try:
+                    order = db_manager.get_order(order_id, conn=conn)
+                    user_id = order.get('user_id') or order.get('student_phone')
+                    bot.send_message(user_id, f"✅ Order #{order.get('daily_token')} is ready/delivered! Enjoy.")
+                except: pass
+                
                 return
 
 
@@ -1043,7 +1090,73 @@ from reportlab.pdfgen import canvas
 from psycopg2.extras import DictCursor
 
 def handle_admin_commands(msg, chat_id, conn=None):
-    """Show Admin Dashboard."""
+    """Admin Logic"""
+    
+    # 1. Check for State-Based Inputs (Custom Report / Settings)
+    state = db_manager.get_session_state(chat_id, conn=conn)
+    
+    if state == 'admin_report_custom':
+        # msg is the Date
+        try:
+            date_obj = datetime.strptime(msg, '%Y-%m-%d')
+            date_str = msg
+            orders = get_daily_report_data(date_str, conn)
+            if not orders:
+                bot.send_message(chat_id, f"❌ No data found for {date_str}.")
+            else:
+                 pdf = generate_pdf_report(orders, date_str)
+                 if pdf: bot.send_document(chat_id, pdf, visible_file_name=f"Report_{date_str}.pdf", caption=f"Report for {date_str}")
+                 else: bot.send_message(chat_id, "Error generating.")
+                 
+            db_manager.set_session_state(chat_id, 'initial', conn=conn)
+            return
+        except ValueError:
+            bot.send_message(chat_id, "❌ Invalid Format. Use YYYY-MM-DD (e.g., 2024-01-30). Try again:")
+            return
+
+    elif state == 'admin_set_open':
+        db_manager.set_setting('open_time', msg, conn=conn)
+        bot.send_message(chat_id, f"✅ Opening time set to {msg}")
+        db_manager.set_session_state(chat_id, 'initial', conn=conn)
+        return
+
+    elif state == 'admin_set_close':
+        db_manager.set_setting('close_time', msg, conn=conn)
+        bot.send_message(chat_id, f"✅ Closing time set to {msg}")
+        db_manager.set_session_state(chat_id, 'initial', conn=conn)
+        return
+
+
+    # 2. Text Commands
+    if msg.lower().startswith("add "):
+        # add Name Price
+        parts = msg.split(' ')
+        if len(parts) >= 3:
+            price = parts[-1]
+            name = " ".join(parts[1:-1])
+            try:
+                res = db_manager.add_menu_item(name, float(price))
+                bot.send_message(chat_id, res)
+            except:
+                bot.send_message(chat_id, "❌ Error. Use: `add Name Price`")
+        return
+        
+    elif msg.lower().startswith("delete "):
+         # Fallback for manual delete ID
+         try:
+             item_id = int(msg.split(' ')[1])
+             res = db_manager.delete_menu_item(item_id) # Using conn inside? Need to verify db_manager uses passed conn if provided
+             # Our db_manager helpers create new conn currently if not passed.
+             # We should update db_manager to accept conn or just let it make one.
+             # Current helper `delete_menu_item(item_id)` does not accept conn arg in definition?
+             # Checking definition... yes it doesn't take conn.
+             # That's fine for low volume commands.
+             bot.send_message(chat_id, res)
+         except:
+             bot.send_message(chat_id, "❌ Invalid ID.")
+         return
+
+
     # Send Dashboard
     txt = "👮‍♂️ **Admin Dashboard**\nSelect an action:"
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -1056,14 +1169,16 @@ def handle_admin_commands(msg, chat_id, conn=None):
     bot.send_message(chat_id, txt, reply_markup=kb, parse_mode='Markdown')
 
 def get_daily_report_data(date_str, conn):
-    """Fetch paid orders for a specific date."""
+    """Fetch paid orders for a specific date with user names."""
     try:
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             cursor.execute('''
-                SELECT * FROM orders 
-                WHERE status = 'paid' 
-                AND created_at::date = %s
-                ORDER BY created_at ASC
+                SELECT o.*, u.name as user_name
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.telegram_id
+                WHERE o.status = 'paid' 
+                AND o.created_at::date = %s
+                ORDER BY o.created_at ASC
             ''', (date_str,))
             orders = [dict(row) for row in cursor.fetchall()]
         return orders
@@ -1104,7 +1219,17 @@ def generate_pdf_report(orders, date_str):
                 y = height - 50
                 
             p.drawString(50, y, f"#{order.get('daily_token', order['id'])}")
-            p.drawString(100, y, str(order.get('student_phone', 'Unknown')[:15]))
+            
+            # Get Name if available, else Phone
+            c_name = order.get('user_name') # Optimistic check if joined
+            if not c_name:
+                 # Try to fetch from user_id if needed, or just use phone
+                 # For efficiency in loop, we rely on stored data or just phone for now unless we do a join.
+                 # Let's try to get name from 'users' table if we have user_id, but doing it in loop is bad.
+                 # Better: Update get_daily_report_data to JOIN users.
+                 c_name = str(order.get('student_phone', 'Unknown'))
+
+            p.drawString(100, y, c_name[:15])
             
             # Simplified items fetch (requires parsing)
             items = db_manager.parse_order_items(order['items'])
@@ -1134,14 +1259,24 @@ def send_admin_notification(order_details, verification_code):
         items_list = db_manager.parse_order_items(order_details['items'])
         food_summary = "\n".join([f"• {item['name']} x {item['qty']}" for item in items_list])
         
+        # Format: JAN28-1
+        try:
+             token_num = f"{datetime.now().strftime('%b%d').upper()}-{order_details.get('daily_token', '?')}"
+        except: token_num = verification_code
+
         msg = (
             f"🚨 *NEW ORDER PAID!* (#{order_details['id']})\n"
-            f"Token: `{verification_code}`\n"
-            f"Amt: ₹{order_details['total_amount']}\n\n"
+            f"Token: `{token_num}`\n"
+            f"Amt: ₹{order_details['total_amount']}\n"
+            f"User: {order_details.get('student_phone')}\n\n"
             f"{food_summary}"
         )
+        
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("✅ Mark Delivered", callback_data=f"mark_delivered_{order_details['id']}"))
+        
         for admin_id in ADMIN_CHAT_IDS:
-            try: bot.send_message(admin_id, msg, parse_mode='Markdown')
+            try: bot.send_message(admin_id, msg, reply_markup=kb, parse_mode='Markdown')
             except: pass
     except Exception as e:
         print(f"Notification error: {e}")

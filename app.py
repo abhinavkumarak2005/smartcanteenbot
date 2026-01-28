@@ -902,7 +902,7 @@ def generate_token_image(token_number, order_id, items, total, student_name):
         draw.text((50, y), f"TOTAL: Rs. {total}", fill=accent_color)
         y += 40
         
-        draw.text((200, y), "PAID ✅", fill=accent_color)
+        draw.text((180, y), "PAID - VERIFIED", fill=accent_color)
         y += 50
 
         # --- QR CODE GENERATION ---

@@ -567,18 +567,31 @@ def handle_razorpay_webhook():
                 if description and '#' in description:
                     try:
                         current_order_id = int(description.split('#')[1])
-                    except: pass
+                        print(f"🔹 Extracted Order ID: {current_order_id}")
+                    except: 
+                        print("⚠️ Failed to extract ID from description")
                 
                 # Fallback: Try reference_id if available in notes
                 if not current_order_id:
                      notes = payment_entity.get('notes', {})
                      if 'reference_id' in notes:
                          current_order_id = int(notes['reference_id'])
+                         print(f"🔹 Extracted ID from Notes: {current_order_id}")
 
                 if current_order_id:
                     # Retrieve order using internal ID
-                    order_details = db_manager.get_order(current_order_id) # Need simple get_order
+                    try:
+                        order_details = db_manager.get_order(current_order_id)
+                    except AttributeError:
+                        print("❌ AttributeError: db_manager.get_order not found. Using get_order_details.")
+                        order_details = db_manager.get_order_details(current_order_id)
+
+                    if not order_details:
+                         print(f"❌ Order {current_order_id} NOT FOUND in DB.")
+                    else:
+                         print(f"🔹 Order Found. Status: {order_details.get('status')}")
                 else:
+                    print("❌ Could not determine Order ID from webhook.")
                     order_details = None
 
                 if order_details and order_details['status'] == 'payment_pending':

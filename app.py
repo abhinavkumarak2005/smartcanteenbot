@@ -409,12 +409,31 @@ def handle_checkout(chat_id, conn):
              db_manager.update_order_status(order_id, 'payment_pending', conn=conn)
              
              # Keyboard with Pay Button
-             kb = types.InlineKeyboardMarkup()
              payment_url = links.get('razorpay_link')
              if payment_url:
-                 kb.add(types.InlineKeyboardButton("💳 Pay Now", url=payment_url))
-                 bot.send_message(chat_id, f"✅ Order Created! (ID: {order_id})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
-                 
+                 # Generate QR for Payment URL
+                 try:
+                     qr = qrcode.QRCode(box_size=10, border=4)
+                     qr.add_data(payment_url)
+                     qr.make(fit=True)
+                     img = qr.make_image(fill_color="black", back_color="white")
+                     
+                     bio = io.BytesIO()
+                     img.save(bio, 'PNG')
+                     bio.seek(0)
+                     
+                     kb = types.InlineKeyboardMarkup()
+                     kb.add(types.InlineKeyboardButton("💳 Pay Now (Click)", url=payment_url))
+                     
+                     caption = f"✅ **Order Created! (ID: {order_id})**\nAmount: ₹{total}\n\nScan this QR to Pay or Click below:"
+                     bot.send_photo(chat_id, bio, caption=caption, reply_markup=kb, parse_mode='Markdown')
+                 except Exception as qr_err:
+                     print(f"QR Gen Error: {qr_err}")
+                     # Fallback to text if QR fails
+                     kb = types.InlineKeyboardMarkup()
+                     kb.add(types.InlineKeyboardButton("💳 Pay Now", url=payment_url))
+                     bot.send_message(chat_id, f"✅ Order Created! (ID: {order_id})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
+
                  # Clear Cart after successful order creation
                  db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
              else:

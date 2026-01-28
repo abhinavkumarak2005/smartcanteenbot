@@ -666,3 +666,6 @@ if __name__ == '__main__':
     create_tables()
     add_default_menu_items()
     test_database_operations()
+
+# Alias for consistency
+get_order = get_order_details

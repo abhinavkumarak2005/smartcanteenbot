@@ -851,80 +851,75 @@ def generate_pickup_qr_code(order_id, student_phone, items_summary):
         return None, None
 
 def generate_token_image(token_number, order_id, items, total, student_name):
-    """Generate a digital token receipt image with QR."""
+    """Generate a digital token receipt image using custom template."""
     try:
-        width = 500
-        height = 900
-        background_color = (255, 255, 255)
-        text_color = (0, 0, 0)
-        accent_color = (0, 128, 0)  # Green
-
-        img = Image.new('RGB', (width, height), background_color)
+        # Load Template
+        template_path = os.path.join(BASE_DIR, 'token_template.png')
+        if os.path.exists(template_path):
+            img = Image.open(template_path).convert('RGB')
+        else:
+            img = Image.new('RGB', (791, 1024), (255, 255, 255))
+            
         draw = ImageDraw.Draw(img)
+        # width, height = 791, 1024
 
-        # Draw Border
-        draw.rectangle([(10, 10), (width-10, height-10)], outline=accent_color, width=5)
+        text_color = (60, 20, 80) # Dark Purple
 
-        # Header
-        y = 50
-        draw.text((150, y), "CANTEEN TOKEN", fill=accent_color) # Approx center
-        y += 40
-        
-        # Token Number (Alphanumeric)
+        # 1. Token Number (Header) - Centered
         date_prefix = datetime.now().strftime('%b%d').upper()
         token_str = f"{date_prefix}-{token_number}"
+        # Approx Center x=395
+        draw.text((350, 190), token_str, fill=text_color) 
         
-        draw.text((150, y), token_str, fill=text_color)
-        y += 50
-
-        # Details
-        draw.text((50, y), f"Order ID: {order_id}", fill=text_color)
-        y += 25
-        draw.text((50, y), f"Name: {student_name}", fill=text_color)
-        y += 25
-        draw.text((50, y), f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", fill=text_color)
-        y += 40
-
-        # Divider
-        draw.line([(40, y), (width-40, y)], fill=text_color, width=1)
-        y += 25
-
-        # Items
-        for item in items:
-            line = f"{item['name']} x{item['qty']} = {item['price']*item['qty']}"
-            draw.text((50, y), line, fill=text_color)
-            y += 25
+        # 2. Left Column Details
+        # Template labels are at ~x=50. Values at x=200?
+        # Visual check: "ORDER ID :" end at x=150?
+        # Let's align values at x=180
+        x_val = 180
+        y_start = 318 # Aligned with first icon
+        gap = 40    # Spacing between icons
         
-        y += 15
-        draw.line([(40, y), (width-40, y)], fill=text_color, width=1)
-        y += 25
-        
-        draw.text((50, y), f"TOTAL: Rs. {total}", fill=accent_color)
-        y += 40
-        
-        draw.text((180, y), "PAID - VERIFIED", fill=accent_color)
-        y += 50
+        draw.text((x_val, y_start), str(order_id), fill=text_color)
+        draw.text((x_val, y_start + gap), str(student_name)[:15], fill=text_color)
+        draw.text((x_val, y_start + gap*2), datetime.now().strftime('%d-%m-%y'), fill=text_color)
+        draw.text((x_val, y_start + gap*3), "VERIFIED", fill=(0, 128, 0))
 
-        # --- QR CODE GENERATION ---
+        # 3. Right Column (Items/Total)
+        # "SAMOSA..." text starts around x=500?
+        # Let's try x=520
+        x_right = 520
+        y_item = 315
+        
+        # Truncate items if too many
+        display_items = items[:4]
+        for item in display_items:
+            line = f"{item['name']} x{item['qty']}"
+            draw.text((x_right, y_item), line, fill=text_color)
+            y_item += 25
+            
+        # Total (Aligned with "TOTAL =" in template)
+        # Template has "TOTAL = ..." at bottom of right section
+        # Approx y=470?
+        draw.text((650, 470), f"Rs. {total}", fill=text_color) 
+
+        # 4. QR Code
+        # Box Center x=395. y start ~530.
         verify_url = f"{BOT_PUBLIC_URL}/verify_token?order_id={order_id}"
         
-        try:
-            qr = qrcode.QRCode(box_size=8, border=2)
-            qr.add_data(verify_url)
-            qr.make(fit=True)
-            qr_img = qr.make_image(fill_color="black", back_color="white")
-            
-            # Resize QR if needed
-            qr_w, qr_h = qr_img.size
-            # Paste QR centered
-            img.paste(qr_img, ((width - qr_w)//2, y))
-            y += qr_h + 10
-            draw.text((180, y), "Scan to Verify", fill=(100, 100, 100))
-        except Exception as qr_e:
-            print(f"Token QR Error: {qr_e}")
-            draw.text((50, y), "QR Generation Failed", fill=text_color)
+        qr = qrcode.QRCode(box_size=10, border=0)
+        qr.add_data(verify_url)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        
+        qr_size = 350
+        qr_img = qr_img.resize((qr_size, qr_size))
+        
+        # Paste Center: (791 - 350)/2 = 220
+        # y = 560
+        img.paste(qr_img, (220, 560))
+        
+        draw.text((350, 940), "Scan to Verify", fill=text_color)
 
-        # Save to Buffer
         img_buffer = io.BytesIO()
         img.save(img_buffer, format='PNG')
         img_buffer.seek(0)

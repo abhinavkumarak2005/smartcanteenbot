@@ -670,6 +670,79 @@ def handle_razorpay_success_redirect():
         
     return f"<h1>Payment Successful! 🎉</h1><p>You can close this window.</p><p>Please check Telegram for your Token receipt (Ref: {ref if ref else 'Processed'}).</p>"
 
+@app.route('/verify_token', methods=['GET'])
+def verify_token_page():
+    order_id = request.args.get('order_id')
+    if not order_id: return "Invalid Link", 400
+    
+    # Simple get_order might fail if date string issue, verify db_manager
+    try:
+        order = db_manager.get_order(order_id)
+    except:
+        order = db_manager.get_order_details(order_id)
+        
+    if not order: return "<h1>❌ Invalid Token</h1>", 404
+    
+    # Format Token ID: JAN28-12
+    try:
+        created_at = order.get('created_at')
+        if isinstance(created_at, str): 
+            # Handle various string formats if needed, or assume ISO
+             created_at = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
+        date_str = created_at.strftime('%b%d').upper()
+    except:
+        date_str = datetime.now().strftime('%b%d').upper()
+
+    token_display = f"{date_str}-{order.get('daily_token')}"
+    
+    status_color = "#27ae60" if order['status'] == 'paid' else "#c0392b"
+    status_text = "✅ VALID TOKEN" if order['status'] == 'paid' else f"⚠️ {order['status'].upper()}"
+    if order['status'] == 'picked_up':
+        status_color = "#f39c12"
+        status_text = "🎫 USED / PICKED UP"
+    
+    # Parse items
+    try:
+        items = json.loads(order['items']) if isinstance(order['items'], str) else order['items']
+        items_html = "".join([f"<li><span>{i['name']}</span> <span>x{i['qty']}</span></li>" for i in items])
+    except: items_html = "<li>Error parsing items</li>"
+    
+    html = f"""
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Token Verification</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 20px; background: #f0f2f5; color: #333; }}
+            .ticket {{ background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 350px; margin: auto; border-top: 5px solid {status_color}; }}
+            .token {{ font-size: 2.5em; font-weight: 800; color: #333; margin: 15px 0; letter-spacing: 1px; }}
+            .status {{ font-size: 1.2em; font-weight: bold; color: {status_color}; background: {status_color}20; padding: 10px; border-radius: 8px; display: inline-block; margin-bottom: 20px; }}
+            ul {{ list-style: none; padding: 0; text-align: left; margin: 20px 0; }}
+            li {{ padding: 10px 0; border-bottom: 1px dashed #ddd; display: flex; justify-content: space-between; }}
+            li:last-child {{ border-bottom: none; }}
+            .meta {{ color: #777; font-size: 0.9em; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="ticket">
+            <h2>🎟 Canteen Token</h2>
+            <div class="status">{status_text}</div>
+            <div class="token">{token_display}</div>
+            
+            <div style="text-align: left; margin-bottom: 5px; font-weight: bold; color: #555;">Order Details</div>
+            <ul>{items_html}</ul>
+            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; margin-top: 10px; border-top: 2px solid #eee; padding-top: 10px;">
+                <span>Total</span>
+                <span>₹{order['total_amount']}</span>
+            </div>
+            
+            <div class="meta">Order #{order['id']} • {date_str}</div>
+        </div>
+    </body>
+    </html>
+    """
+    return html
+
 
 # --- PAYMENT HELPER FUNCTIONS ---
 
@@ -776,10 +849,10 @@ def generate_pickup_qr_code(order_id, student_phone, items_summary):
         return None, None
 
 def generate_token_image(token_number, order_id, items, total, student_name):
-    """Generate a digital token receipt image."""
+    """Generate a digital token receipt image with QR."""
     try:
-        width = 400
-        height = 500
+        width = 500
+        height = 900
         background_color = (255, 255, 255)
         text_color = (0, 0, 0)
         accent_color = (0, 128, 0)  # Green
@@ -787,47 +860,67 @@ def generate_token_image(token_number, order_id, items, total, student_name):
         img = Image.new('RGB', (width, height), background_color)
         draw = ImageDraw.Draw(img)
 
-        try:
-            font_large = ImageFont.load_default()
-        except:
-            font_large = ImageFont.load_default()
-
         # Draw Border
         draw.rectangle([(10, 10), (width-10, height-10)], outline=accent_color, width=5)
 
-        # Content
-        y = 30
-        draw.text((width//2 - 50, y), "CANTEEN TOKEN", fill=accent_color, font=font_large)
+        # Header
+        y = 50
+        draw.text((150, y), "CANTEEN TOKEN", fill=accent_color) # Approx center
         y += 40
         
-        # Token Number (Big)
-        draw.text((width//2 - 40, y), f"#{token_number}", fill=text_color, font=font_large)
+        # Token Number (Alphanumeric)
+        date_prefix = datetime.now().strftime('%b%d').upper()
+        token_str = f"{date_prefix}-{token_number}"
+        
+        draw.text((150, y), token_str, fill=text_color)
+        y += 50
+
+        # Details
+        draw.text((50, y), f"Order ID: {order_id}", fill=text_color)
+        y += 25
+        draw.text((50, y), f"Name: {student_name}", fill=text_color)
+        y += 25
+        draw.text((50, y), f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", fill=text_color)
         y += 40
 
-        draw.text((20, y), f"Order ID: {order_id}", fill=text_color)
-        y += 20
-        draw.text((20, y), f"Name: {student_name}", fill=text_color)
-        y += 20
-        draw.text((20, y), f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", fill=text_color)
-        y += 40
-
-        draw.line([(20, y), (width-20, y)], fill=text_color, width=1)
-        y += 20
+        # Divider
+        draw.line([(40, y), (width-40, y)], fill=text_color, width=1)
+        y += 25
 
         # Items
         for item in items:
             line = f"{item['name']} x{item['qty']} = {item['price']*item['qty']}"
-            draw.text((20, y), line, fill=text_color)
-            y += 20
+            draw.text((50, y), line, fill=text_color)
+            y += 25
         
-        y += 20
-        draw.line([(20, y), (width-20, y)], fill=text_color, width=1)
-        y += 20
+        y += 15
+        draw.line([(40, y), (width-40, y)], fill=text_color, width=1)
+        y += 25
         
-        draw.text((20, y), f"TOTAL: Rs. {total}", fill=accent_color)
+        draw.text((50, y), f"TOTAL: Rs. {total}", fill=accent_color)
         y += 40
         
-        draw.text((width//2 - 30, y), "PAID ✅", fill=accent_color)
+        draw.text((200, y), "PAID ✅", fill=accent_color)
+        y += 50
+
+        # --- QR CODE GENERATION ---
+        verify_url = f"{BOT_PUBLIC_URL}/verify_token?order_id={order_id}"
+        
+        try:
+            qr = qrcode.QRCode(box_size=8, border=2)
+            qr.add_data(verify_url)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+            
+            # Resize QR if needed
+            qr_w, qr_h = qr_img.size
+            # Paste QR centered
+            img.paste(qr_img, ((width - qr_w)//2, y))
+            y += qr_h + 10
+            draw.text((180, y), "Scan to Verify", fill=(100, 100, 100))
+        except Exception as qr_e:
+            print(f"Token QR Error: {qr_e}")
+            draw.text((50, y), "QR Generation Failed", fill=text_color)
 
         # Save to Buffer
         img_buffer = io.BytesIO()

@@ -864,46 +864,61 @@ def generate_token_image(token_number, order_id, items, total, student_name):
         # width, height = 791, 1024
 
         text_color = (60, 20, 80) # Dark Purple
+        green_color = (0, 150, 0)
+
+        # Fonts
+        font_path = os.path.join(BASE_DIR, 'Roboto-Bold.ttf')
+        try:
+            # Use larger fonts for High-Res template
+            font_header = ImageFont.truetype(font_path, 60)
+            font_text = ImageFont.truetype(font_path, 28)
+            font_small = ImageFont.truetype(font_path, 24)
+        except:
+            font_header = ImageFont.load_default()
+            font_text = ImageFont.load_default()
+            font_small = ImageFont.load_default()
 
         # 1. Token Number (Header) - Centered
         date_prefix = datetime.now().strftime('%b%d').upper()
         token_str = f"{date_prefix}-{token_number}"
-        # Approx Center x=395
-        draw.text((350, 190), token_str, fill=text_color) 
+        
+        try:
+             w = draw.textlength(token_str, font=font_header)
+             x_header = (791 - w) // 2
+        except: x_header = 300
+        
+        draw.text((x_header, 210), token_str, fill=text_color, font=font_header)
         
         # 2. Left Column Details
-        # Template labels are at ~x=50. Values at x=200?
-        # Visual check: "ORDER ID :" end at x=150?
-        # Let's align values at x=180
-        x_val = 180
-        y_start = 318 # Aligned with first icon
-        gap = 40    # Spacing between icons
+        # Moved RIGHT to x=360 to avoid overlapping labels
+        x_val = 360 
+        y_start = 325 
+        gap = 45
         
-        draw.text((x_val, y_start), str(order_id), fill=text_color)
-        draw.text((x_val, y_start + gap), str(student_name)[:15], fill=text_color)
-        draw.text((x_val, y_start + gap*2), datetime.now().strftime('%d-%m-%y'), fill=text_color)
-        draw.text((x_val, y_start + gap*3), "VERIFIED", fill=(0, 128, 0))
+        draw.text((x_val, y_start), str(order_id), fill=text_color, font=font_text)
+        
+        # Truncate long names
+        s_name = str(student_name)
+        if len(s_name) > 15: s_name = s_name[:12] + "..."
+        draw.text((x_val, y_start + gap), s_name, fill=text_color, font=font_text)
+        
+        draw.text((x_val, y_start + gap*2), datetime.now().strftime('%d-%m-%y'), fill=text_color, font=font_text)
+        draw.text((x_val, y_start + gap*3), "VERIFIED", fill=green_color, font=font_text)
 
         # 3. Right Column (Items/Total)
-        # "SAMOSA..." text starts around x=500?
-        # Let's try x=520
-        x_right = 520
-        y_item = 315
+        x_right = 530
+        y_item = 325
         
-        # Truncate items if too many
         display_items = items[:4]
         for item in display_items:
-            line = f"{item['name']} x{item['qty']}"
-            draw.text((x_right, y_item), line, fill=text_color)
-            y_item += 25
+            line = f"{item['name'][:10]} x{item['qty']}"
+            draw.text((x_right, y_item), line, fill=text_color, font=font_small)
+            y_item += 28
             
-        # Total (Aligned with "TOTAL =" in template)
-        # Template has "TOTAL = ..." at bottom of right section
-        # Approx y=470?
-        draw.text((650, 470), f"Rs. {total}", fill=text_color) 
+        # Total
+        draw.text((610, 475), f"Rs. {total}", fill=text_color, font=font_text) 
 
         # 4. QR Code
-        # Box Center x=395. y start ~530.
         verify_url = f"{BOT_PUBLIC_URL}/verify_token?order_id={order_id}"
         
         qr = qrcode.QRCode(box_size=10, border=0)
@@ -914,11 +929,18 @@ def generate_token_image(token_number, order_id, items, total, student_name):
         qr_size = 350
         qr_img = qr_img.resize((qr_size, qr_size))
         
-        # Paste Center: (791 - 350)/2 = 220
-        # y = 560
+        # Center in box (Width 791. QR 350. (791-350)/2 = 220)
+        # y start = 560
         img.paste(qr_img, (220, 560))
         
-        draw.text((350, 940), "Scan to Verify", fill=text_color)
+        # Scan Text
+        try:
+             msg = "Scan to Verify"
+             w = draw.textlength(msg, font=font_text)
+             x_msg = (791 - w) // 2
+        except: x_msg = 300
+        
+        draw.text((x_msg, 930), "Scan to Verify", fill=text_color, font=font_text)
 
         img_buffer = io.BytesIO()
         img.save(img_buffer, format='PNG')

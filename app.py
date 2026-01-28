@@ -112,6 +112,19 @@ def handle_incoming_message(message, conn=None):
             handle_admin_commands(incoming_msg, chat_id, conn)
             return
 
+        # --- GLOBAL CANCEL COMMAND ---
+        if incoming_msg.lower() == 'cancel':
+            db_manager.set_session_state(chat_id, 'initial', conn=conn)
+            db_manager.set_session_data(chat_id, 'cart', [], conn=conn) # Clear cart
+            
+            # Check if registered
+            if user:
+                bot.send_message(chat_id, "❌ Action Cancelled.", reply_markup=main_menu_keyboard())
+                db_manager.set_session_state(chat_id, 'menu', conn=conn)
+            else:
+                bot.send_message(chat_id, "❌ Registration Cancelled. Type /start to begin again.")
+            return
+
         # --- WORKING HOURS CHECK ---
         open_time = db_manager.get_setting('open_time', '00:00', conn=conn)
         close_time = db_manager.get_setting('close_time', '23:59', conn=conn)
@@ -178,6 +191,7 @@ def handle_callback_query(call, conn=None):
                 for i in items:
                     kb.add(types.InlineKeyboardButton(f"❌ Delete {i['name']}", callback_data=f"del_{i['id']}"))
                 kb.add(types.InlineKeyboardButton("➕ Add New Item (Type 'add Name Price')", callback_data="admin_add_help"))
+                kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="admin_home"))
                 bot.send_message(chat_id, "🍔 **Menu Management**\nTap to delete:", reply_markup=kb, parse_mode='Markdown')
                 return
 
@@ -187,6 +201,7 @@ def handle_callback_query(call, conn=None):
                 # working hours
                 kb.add(types.InlineKeyboardButton("⏰ Set Open Time", callback_data="set_open_time"))
                 kb.add(types.InlineKeyboardButton("🛑 Set Close Time", callback_data="set_close_time"))
+                kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="admin_home"))
                 bot.send_message(chat_id, "⚙️ **Settings**\nConfigure bot operations:", reply_markup=kb, parse_mode='Markdown')
                 return
             
@@ -224,6 +239,10 @@ def handle_callback_query(call, conn=None):
                 return
 
 
+            elif data == 'admin_home':
+                handle_admin_commands("dashboard", chat_id, conn)
+                return
+
         # Student Flow
         if data == 'menu':
             show_menu(chat_id, conn, message_to_edit=msg_id)
@@ -259,6 +278,7 @@ def handle_callback_query(call, conn=None):
             kb = types.InlineKeyboardMarkup()
             kb.row(types.InlineKeyboardButton("🍽️ Dine-in", callback_data="type_dinein"),
                    types.InlineKeyboardButton("📦 Parcel", callback_data="type_parcel"))
+            kb.add(types.InlineKeyboardButton("🔙 Back to Cart", callback_data="view_cart"))
             try: bot.edit_message_text("🍽️ **Select Dining Option:**", chat_id, msg_id, reply_markup=kb, parse_mode='Markdown')
             except: bot.send_message(chat_id, "🍽️ **Select Dining Option:**", reply_markup=kb, parse_mode='Markdown')
 
@@ -281,8 +301,8 @@ def handle_registration_flow(message, telegram_id, text, conn):
     """Handle new user registration."""
     # Check session state for registration step
     # We can store step in 'registration_data' or 'state'
-    # Simplified: Use session state
     state = db_manager.get_session_state(telegram_id, conn=conn)
+    print(f"🔹 Registration Flow: User {telegram_id} | State: {state} | Input: {text}")
     
     if text == '/start':
         # Reset registration if user sends /start
@@ -291,11 +311,16 @@ def handle_registration_flow(message, telegram_id, text, conn):
 
     if state == 'initial':
         # Prompt Name
-        bot.send_message(telegram_id, "👋 Welcome! It seems you are new here.\nPlease enter your **Full Name** to register:", parse_mode='Markdown')
+        bot.send_message(telegram_id, "👋 Welcome! It seems you are new here.\nPlease enter your **Full Name** to register:\n_(Type 'cancel' to stop)_", parse_mode='Markdown')
         db_manager.set_session_state(telegram_id, 'reg_name', conn=conn)
         
     elif state == 'reg_name':
         # Save Name, Prompt Phone
+        # Robustness: Check if text is valid (not empty)
+        if len(text) < 2:
+             bot.send_message(telegram_id, "⚠️ Name too short. Please enter your Full Name:")
+             return
+
         db_manager.set_session_data(telegram_id, 'registration_data', {'name': text}, conn=conn)
         bot.send_message(telegram_id, f"Nice to meet you, {text}! 🤝\nNow, please share your **Mobile Number** (or type it):", parse_mode='Markdown')
         db_manager.set_session_state(telegram_id, 'reg_phone', conn=conn)
@@ -317,9 +342,11 @@ def handle_registration_flow(message, telegram_id, text, conn):
     
     else:
         # Fallback for undefined states (Limbo Fix)
+        # Verify if actually registered to avoid loops? 
+        # No, 'user' check in main handler covers that.
         print(f"⚠️ User {telegram_id} in unknown state '{state}'. Resetting.")
         db_manager.set_session_state(telegram_id, 'initial', conn=conn)
-        bot.send_message(telegram_id, "👋 Welcome! Let's get you registered.\nPlease enter your **Full Name**:", parse_mode='Markdown')
+        bot.send_message(telegram_id, "👋 Welcome! Let's get you registered.\nPlease enter your **Full Name**:\n_(Type 'cancel' to stop)_", parse_mode='Markdown')
         db_manager.set_session_state(telegram_id, 'reg_name', conn=conn)
 
 def handle_student_flow(msg, telegram_id, chat_id, user, conn=None):
@@ -346,7 +373,7 @@ def show_menu(chat_id, conn, message_to_edit=None):
             bot.send_message(chat_id, "📋 Menu is currently empty.")
             return
 
-        txt = "📋 *Today's Menu*\nSelect an item to order:"
+        txt = "📋 *Today's Menu*\nSelect an item to order:\n_(Type 'cancel' to restart)_"
         keyboard = types.InlineKeyboardMarkup(row_width=1)
         
         for item in items:
@@ -427,7 +454,7 @@ def show_cart(chat_id, conn, message_to_edit=None):
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("✅ Confirm & Pay", callback_data="checkout"))
     keyboard.add(types.InlineKeyboardButton("❌ Clear Cart", callback_data="clear_cart"))
-    keyboard.add(types.InlineKeyboardButton("🍔 Add More", callback_data="menu"))
+    keyboard.add(types.InlineKeyboardButton("🔙 Back to Menu", callback_data="menu"))
     
     if message_to_edit:
         bot.edit_message_text(txt, chat_id, message_to_edit, reply_markup=keyboard, parse_mode='Markdown')

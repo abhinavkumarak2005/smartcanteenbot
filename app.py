@@ -609,24 +609,24 @@ def handle_razorpay_webhook():
                      except: order_details = db_manager.get_order_details(current_order_id)
 
                 if order_details:
-                     print(f"🔹 Order Found for Processing: {order_details['id']} ({order_details['status']})")
-                     if order_details['status'] == 'payment_pending':
-                    
-                    # 1. Update DB to Paid
-                    db_manager.update_order_status(current_order_id, 'paid')
-                    
-                    # 2. Get Data for Token
-                    items_data = db_manager.parse_order_items(order_details['items'])
-                    token_num = order_details.get('daily_token', 0)
-                    total_amt = order_details['total_amount']
-                    student_chat_id = order_details.get('user_id') or order_details['student_phone'] # Fallback
-                    
-                    # Fetch User Name
-                    student_name = "Student"
-                    try:
-                        user = db_manager.get_user(student_chat_id)
-                        if user: student_name = user.get('name', 'Student')
-                    except: pass
+                    print(f"🔹 Order Found for Processing: {order_details['id']} ({order_details['status']})")
+                    if order_details['status'] == 'payment_pending':
+                        
+                        # 1. Update DB to Paid
+                        db_manager.update_order_status(current_order_id, 'paid')
+                        
+                        # 2. Get Data for Token
+                        items_data = db_manager.parse_order_items(order_details['items'])
+                        token_num = order_details.get('daily_token', 0)
+                        total_amt = order_details['total_amount']
+                        student_chat_id = order_details.get('user_id') or order_details['student_phone'] # Fallback
+                        
+                        # Fetch User Name
+                        student_name = "Student"
+                        try:
+                            user = db_manager.get_user(student_chat_id)
+                            if user: student_name = user.get('name', 'Student')
+                        except: pass
 
                     # 3. Generate Token Image
                     try:

@@ -784,22 +784,22 @@ def view_token(order_id):
         </div>
 
         <script>
-            function downloadToken() {
+            function downloadToken() {{
                 var btn = document.querySelector('button');
                 btn.innerText = "Saving...";
                 
-                html2canvas(document.getElementById("tokenCard"), {
+                html2canvas(document.getElementById("tokenCard"), {{
                     scale: 3,
                     useCORS: true,
                     backgroundColor: null 
-                }).then(canvas => {
+                }}).then(canvas => {{
                     var link = document.createElement('a');
                     link.download = 'Token-{token_display}.png';
                     link.href = canvas.toDataURL("image/png");
                     link.click();
                     btn.innerText = "📸 Save to Gallery";
-                });
-            }
+                }});
+            }}
         </script>
     </body>
     </html>

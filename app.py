@@ -619,29 +619,72 @@ def handle_razorpay_webhook():
                         items_data = db_manager.parse_order_items(order_details['items'])
                         token_num = order_details.get('daily_token', 0)
                         total_amt = order_details['total_amount']
-                        student_chat_id = order_details.get('user_id') or order_details['student_phone'] # Fallback
-                        
-                        # Fetch User Name
-                        student_name = "Student"
-                        try:
-                            user = db_manager.get_user(student_chat_id)
-                            if user: student_name = user.get('name', 'Student')
-                        except: pass
+                        student_chat_id = order_details.get('user_id') or order_details['student_phone']    elif call.data == 'confirm_order':
+        # NEW FLOW: Ask for Dine-in vs Parcel
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("🍽️ Dine-in", callback_data='type_dinein'),
+            InlineKeyboardButton("📦 Parcel", callback_data='type_parcel')
+        )
+        try:
+            bot.edit_message_text(
+                "🍽️ **Select Dining Option:**\n\nDo you want to eat here or take it away?", 
+                call.message.chat.id, 
+                call.message.message_id, 
+                reply_markup=markup,
+                parse_mode='Markdown'
+            )
+        except: pass
 
-                        # 3. Generate Link and QR
-                        token_link = f"{request.host_url}token/{current_order_id}"
-                        
-                        try:
-                            # Generate QR for the Link
-                            qr = qrcode.QRCode(box_size=10, border=4)
-                            qr.add_data(token_link)
-                            qr.make(fit=True)
-                            qr_img = qr.make_image(fill_color="black", back_color="white")
-                            
-                            bio = io.BytesIO()
-                            qr_img.save(bio, 'PNG')
-                            bio.seek(0)
-                        
+    elif call.data in ['type_dinein', 'type_parcel']:
+        # Final Step: Generate Payment Link
+        order_type = 'Dine-in' if call.data == 'type_dinein' else 'Parcel'
+        
+        # 1. Immediate Feedback (Fix Latency Perception)
+        try:
+            bot.edit_message_text(
+                f"⏳ **Generating Payment Link ({order_type})...**\nPlease wait.", 
+                call.message.chat.id, 
+                call.message.message_id,
+                parse_mode='Markdown'
+            )
+        except: pass
+        
+        # 2. Process Order
+        session = db_manager.get_session(student_phone)
+        if not session or not session.get('cart'):
+             bot.answer_callback_query(call.id, "Cart is empty!")
+             return
+
+        cart = session['cart']
+        if isinstance(cart, str): cart = json.loads(cart)
+        
+        total_price = sum(item['price'] * item['qty'] for item in cart)
+        
+        # Create DB Order
+        order_id = db_manager.create_order(student_phone, cart, total_price, "payment_pending")
+        if order_id:
+            # Generate Link with Order Type in Notes
+            payment_links = generate_razorpay_payment_link(total_price, order_id, student_phone, notes={'order_type': order_type})
+            
+            if payment_links:
+                # Save Razorpay ID
+                db_manager.update_order_razorpay_id(order_id, payment_links['id'])
+                
+                # Show Payment Button
+                markup = create_payment_keyboard(payment_links, order_id)
+                msg_text = (
+                    f"✅ **Order Confirmed!**\n"
+                    f"🆔 Order #{order_id}\n"
+                    f"🍱 Type: *{order_type}*\n"
+                    f"💰 Total: ₹{total_price}\n\n"
+                    f"👇 **Click below to Pay**"
+                )
+                bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+            else:
+                bot.send_message(call.message.chat.id, "❌ Error generating payment link. Try again.")
+        else:
+            bot.send_message(call.message.chat.id, "❌ Database Error. Clean cart and try again.")                    
                             caption = (
                                 f"🎉 **Payment Successful!**\n\n"
                                 f"🔑 **Token #{token_num}**\n"
@@ -681,7 +724,7 @@ def handle_razorpay_success_redirect():
 
 @app.route('/token/<order_id>', methods=['GET'])
 def view_token(order_id):
-    """View Digital Token (Self-Destructing)."""
+    """View Digital Token (Self-Destructing) with Client-Side Download."""
     try:
         order = db_manager.get_order(order_id)
     except:
@@ -689,19 +732,14 @@ def view_token(order_id):
         
     if not order: return "<h1>❌ Invalid Token</h1>", 404
     
-    # Expiry Check (Valid only for Today)
+    # Expiry Check
     try:
         created_at = order.get('created_at')
         if isinstance(created_at, str): 
              created_at = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-        
-        # Allow viewing if it's the same day (naive check)
-        # Or if status is 'paid'. If 'picked_up', show used.
-        # User requested "Active for that day".
         if created_at.date() != datetime.now().date():
             return "<h1>⏳ Token Link Expired</h1><p>This link is only valid for the day of purchase.</p>", 410
-            
-    except: pass # Proceed if date parse fails (safety)
+    except: pass
 
     # Format Data
     date_str = created_at.strftime('%b %d')
@@ -721,97 +759,96 @@ def view_token(order_id):
     <html>
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Token #{token_display}</title>
+        <title>{token_display}</title>
+        <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; padding: 20px; text-align: center; }}
-            .card {{ background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); max-width: 400px; margin: auto; overflow: hidden; }}
-            .header {{ background: #4a235a; color: white; padding: 20px; }}
-            .header h1 {{ margin: 0; font-size: 2em; letter-spacing: 2px; }}
-            .header .id {{ font-size: 0.9em; opacity: 0.8; margin-top: 5px; }}
-            .content {{ padding: 20px; text-align: left; }}
-            .status-badge {{ background: {status_color}20; color: {status_color}; padding: 5px 15px; border-radius: 15px; font-weight: bold; display: inline-block; margin-bottom: 20px; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #eef2f5; padding: 20px; text-align: center; color: #333; }}
+            .container {{ max-width: 420px; margin: auto; }}
+            .card {{ background: white; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.15); overflow: hidden; position: relative; }}
+            .header {{ background: #4a235a; color: white; padding: 25px 20px; }}
+            .header h2 {{ margin: 0; font-size: 0.9em; opacity: 0.9; text-transform: uppercase; letter-spacing: 1.5px; }}
+            .header h1 {{ margin: 10px 0 0; font-size: 2.5em; font-weight: 800; letter-spacing: 1px; }}
+            
+            .content {{ padding: 20px 25px; text-align: left; }}
+            .status-wrapper {{ text-align: center; margin-top: -35px; margin-bottom: 20px; }}
+            .status-badge {{ background: #d4edda; color: #155724; padding: 8px 25px; border-radius: 50px; font-weight: bold; border: 3px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }}
+            
+            p {{ margin: 10px 0; font-size: 1.05em; display: flex; justify-content: space-between; }}
+            .label {{ font-weight: 600; color: #555; }}
+            
+            hr {{ border: 0; border-top: 1px dashed #ddd; margin: 20px 0; }}
+            
             ul {{ list-style: none; padding: 0; margin: 0; }}
-            li {{ display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed #eee; }}
-            .total {{ display: flex; justify-content: space-between; font-weight: bold; font-size: 1.2em; margin-top: 15px; border-top: 2px solid #eee; padding-top: 15px; }}
-            .footer {{ padding: 20px; background: #fafafa; }}
-            .btn {{ display: block; width: 100%; padding: 15px; background: #4a235a; color: white; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 10px; }}
-            .btn.secondary {{ background: white; color: #4a235a; border: 2px solid #4a235a; }}
+            li {{ display: flex; justify-content: space-between; padding: 8px 0; font-size: 1em; }}
+            
+            .total {{ display: flex; justify-content: space-between; font-weight: 800; font-size: 1.3em; margin-top: 20px; color: #4a235a; }}
+            
+            .footer {{ padding: 20px; background: white; border-top: 1px solid #f0f0f0; }}
+            .btn {{ cursor: pointer; display: block; width: 100%; border: none; padding: 16px; background: #4a235a; color: white; border-radius: 12px; font-weight: bold; font-size: 1.1em; transition: transform 0.1s; text-decoration: none; }}
+            .btn:active {{ transform: scale(0.98); }}
+            .note {{ font-size: 0.8em; color: #888; margin-top: 12px; }}
         </style>
     </head>
     <body>
-        <div class="card">
-            <div class="header">
-                <div class="id">TOKEN</div>
-                <h1>{token_display}</h1>
-            </div>
-            <div class="content">
-                <div style="text-align: center;"><span class="status-badge">{status_text}</span></div>
-                <p><strong>Order ID:</strong> {order_id}</p>
-                <p><strong>Date:</strong> {date_str}</p>
-                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-                <ul>{items_html}</ul>
-                <div class="total">
-                    <span>Total</span>
-                    <span>₹{order['total_amount']}</span>
+        <div class="container">
+            <div class="card" id="tokenCard">
+                <div class="header">
+                    <h2>Token</h2>
+                    <h1>{token_display}</h1>
                 </div>
+                <div class="content">
+                    <div class="status-wrapper"><span class="status-badge">{status_text}</span></div>
+                    
+                    <p><span class="label">Order ID</span> <span>{order_id}</span></p>
+                    <p><span class="label">Date</span> <span>{date_str}</span></p>
+                    
+                    <hr>
+                    <div style="font-weight: 600; color: #777; font-size: 0.9em; margin-bottom: 10px;">ITEMS</div>
+                    <ul>{items_html}</ul>
+                    
+                    <hr>
+                    <div class="total">
+                        <span>Total</span>
+                        <span>₹{order['total_amount']}</span>
+                    </div>
+                </div>
+                
+                <!-- Footer for visual balance, but buttons outside for screenshot -->
+                <div style="height: 20px;"></div>
             </div>
-            <div class="footer">
-                <a href="/token/{order_id}/download" class="btn">📥 Download Image</a>
-                <div style="font-size: 0.8em; color: #777; margin-top: 10px;">Link expires at midnight</div>
+            
+            <div class="footer" style="background: transparent; border: none; margin-top: 20px;">
+                <button onclick="downloadToken()" class="btn">📸 Save to Gallery</button>
+                <div class="note">Link expires at midnight</div>
             </div>
         </div>
+
+        <script>
+            function downloadToken() {
+                var btn = document.querySelector('button');
+                btn.innerText = "Saving...";
+                
+                html2canvas(document.getElementById("tokenCard"), {
+                    scale: 3,
+                    useCORS: true,
+                    backgroundColor: null 
+                }).then(canvas => {
+                    var link = document.createElement('a');
+                    link.download = 'Token-{token_display}.png';
+                    link.href = canvas.toDataURL("image/png");
+                    link.click();
+                    btn.innerText = "📸 Save to Gallery";
+                });
+            }
+        </script>
     </body>
     </html>
     """
     return html
 
-@app.route('/token/<order_id>/download')
-def download_token(order_id):
-    """Generate and Download Token Image."""
-    try:
-        # Fetch Order
-        try: order = db_manager.get_order(order_id)
-        except: order = db_manager.get_order_details(order_id)
-        
-        if not order: return "Not Found", 404
-        
-        # Check Expiry
-        created_at = order.get('created_at')
-        if isinstance(created_at, str): 
-             created_at = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-        if created_at.date() != datetime.now().date():
-            return "Expired", 410
+# Removed server-side download route since we handle it on client now
+# Keeping webhooks intact
 
-        # Parse Data
-        items = json.loads(order['items']) if isinstance(order['items'], str) else order['items']
-        student_id = order.get('user_id') or order.get('student_phone')
-        student_name = "Student"
-        try:
-             u = db_manager.get_user(student_id)
-             if u: student_name = u.get('name', 'Student')
-        except: pass
-        
-        # Generate
-        img_buffer = generate_token_image(
-            order.get('daily_token'),
-            order_id,
-            items,
-            order['total_amount'],
-            student_name
-        )
-        
-        if img_buffer:
-            return send_file(
-                img_buffer,
-                mimetype='image/png',
-                as_attachment=True,
-                download_name=f"Canteen_Token_{order['daily_token']}.png"
-            )
-        else:
-            return "Generation Error", 500
-            
-    except Exception as e:
-        return f"Error: {e}", 500
 
 
 # --- PAYMENT HELPER FUNCTIONS ---

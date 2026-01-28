@@ -207,12 +207,20 @@ def handle_callback_query(call, conn=None):
             bot.answer_callback_query(call.id, "Cart Cleared")
             show_menu(chat_id, conn, message_to_edit=msg_id)
 
-        elif data == 'checkout':
-            handle_checkout(chat_id, conn)
+        elif data in ['checkout', 'confirm_order']:
+            # Ask for Dining Option
+            kb = types.InlineKeyboardMarkup()
+            kb.row(types.InlineKeyboardButton("🍽️ Dine-in", callback_data="type_dinein"),
+                   types.InlineKeyboardButton("📦 Parcel", callback_data="type_parcel"))
+            try: bot.edit_message_text("🍽️ **Select Dining Option:**", chat_id, msg_id, reply_markup=kb, parse_mode='Markdown')
+            except: bot.send_message(chat_id, "🍽️ **Select Dining Option:**", reply_markup=kb, parse_mode='Markdown')
 
-        elif data == 'confirm_order':
-            # This seems redundant if checkout handles it, but keeping for safety
-            handle_checkout(chat_id, conn)
+        elif data in ['type_dinein', 'type_parcel']:
+            # Handle Checkout with Type
+            otype = 'Dine-in' if data == 'type_dinein' else 'Parcel'
+            try: bot.edit_message_text(f"⏳ Generating Payment Link ({otype})...", chat_id, msg_id)
+            except: pass
+            handle_checkout(chat_id, conn, order_type=otype)
         
         try:
             bot.answer_callback_query(call.id)
@@ -392,7 +400,7 @@ def add_to_cart(chat_id, item_id, qty, conn):
 
 
 
-def handle_checkout(chat_id, conn):
+def handle_checkout(chat_id, conn, order_type='Dine-in'):
     """Create order and generate payment link."""
     cart = db_manager.get_session_data(chat_id, 'cart', conn=conn)
     if not cart: return
@@ -404,43 +412,45 @@ def handle_checkout(chat_id, conn):
     order_id = db_manager.create_order(user['phone_number'], cart, total, user_id=chat_id, conn=conn)
     
     if order_id:
-        links, _ = generate_razorpay_payment_link(order_id, total, user['phone_number'])
+        # Pass notes to Razorpay (requires updating generate func if not kwargs ready)
+        # Assuming generate_razorpay_payment_link takes **kwargs or notes arg. 
+        # I will update the definition of generate_razorpay_payment_link next.
+        links, _ = generate_razorpay_payment_link(order_id, total, user['phone_number'], notes={'order_type': order_type})
+        
         if links:
              db_manager.update_order_status(order_id, 'payment_pending', conn=conn)
              
              # Keyboard with Pay Button
              payment_url = links.get('razorpay_link')
-             if payment_url:
-                 # Generate QR for Payment URL
-                 try:
-                     qr = qrcode.QRCode(box_size=10, border=4)
-                     qr.add_data(payment_url)
-                     qr.make(fit=True)
-                     img = qr.make_image(fill_color="black", back_color="white")
-                     
-                     bio = io.BytesIO()
-                     img.save(bio, 'PNG')
-                     bio.seek(0)
-                     
-                     kb = types.InlineKeyboardMarkup()
-                     kb.add(types.InlineKeyboardButton("💳 Pay Now (Click)", url=payment_url))
-                     
-                     caption = f"✅ **Order Created! (ID: {order_id})**\nAmount: ₹{total}\n\nScan this QR to Pay or Click below:"
-                     bot.send_photo(chat_id, bio, caption=caption, reply_markup=kb, parse_mode='Markdown')
-                 except Exception as qr_err:
-                     print(f"QR Gen Error: {qr_err}")
-                     # Fallback to text if QR fails
-                     kb = types.InlineKeyboardMarkup()
-                     kb.add(types.InlineKeyboardButton("💳 Pay Now", url=payment_url))
-                     bot.send_message(chat_id, f"✅ Order Created! (ID: {order_id})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
+             
+             try:
+                 qr = qrcode.QRCode(box_size=10, border=4)
+                 qr.add_data(payment_url)
+                 qr.make(fit=True)
+                 img = qr.make_image(fill_color="black", back_color="white")
+                 
+                 bio = io.BytesIO()
+                 img.save(bio, 'PNG')
+                 bio.seek(0)
+                 
+                 kb = types.InlineKeyboardMarkup()
+                 kb.add(types.InlineKeyboardButton("💳 Pay Now (Click)", url=payment_url))
+                 
+                 caption = f"✅ **Order Created! (ID: {order_id})**\n🍱 Type: **{order_type}**\nAmount: ₹{total}\n\nScan this QR to Pay or Click below:"
+                 bot.send_photo(chat_id, bio, caption=caption, reply_markup=kb, parse_mode='Markdown')
+             except Exception as qr_err:
+                 print(f"QR Gen Error: {qr_err}")
+                 # Fallback
+                 kb = types.InlineKeyboardMarkup()
+                 kb.add(types.InlineKeyboardButton("💳 Pay Now", url=payment_url))
+                 bot.send_message(chat_id, f"✅ Order Created! ({order_type})\nAmount: ₹{total}\n\nTap below to pay:", reply_markup=kb)
 
-                 # Clear Cart after successful order creation
-                 db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
-             else:
-                 bot.send_message(chat_id, "❌ Error: Payment link generation failed (empty URL).")
+             # Clear Cart
+             db_manager.set_session_data(chat_id, 'cart', [], conn=conn)
         else:
-            bot.send_message(chat_id, "❌ Error generating payment link.")
-
+             bot.send_message(chat_id, "❌ Error: Payment link generation failed.")
+    else:
+        bot.send_message(chat_id, "❌ Error creating order (DB).")
 def main_menu_keyboard():
     k = types.InlineKeyboardMarkup()
     k.add(types.InlineKeyboardButton("📋 View Menu", callback_data="menu"))
@@ -619,72 +629,22 @@ def handle_razorpay_webhook():
                         items_data = db_manager.parse_order_items(order_details['items'])
                         token_num = order_details.get('daily_token', 0)
                         total_amt = order_details['total_amount']
-                        student_chat_id = order_details.get('user_id') or order_details['student_phone']    elif call.data == 'confirm_order':
-        # NEW FLOW: Ask for Dine-in vs Parcel
-        markup = InlineKeyboardMarkup()
-        markup.row(
-            InlineKeyboardButton("🍽️ Dine-in", callback_data='type_dinein'),
-            InlineKeyboardButton("📦 Parcel", callback_data='type_parcel')
-        )
-        try:
-            bot.edit_message_text(
-                "🍽️ **Select Dining Option:**\n\nDo you want to eat here or take it away?", 
-                call.message.chat.id, 
-                call.message.message_id, 
-                reply_markup=markup,
-                parse_mode='Markdown'
-            )
-        except: pass
+                        student_chat_id = order_details.get('user_id') or order_details['student_phone']
 
-    elif call.data in ['type_dinein', 'type_parcel']:
-        # Final Step: Generate Payment Link
-        order_type = 'Dine-in' if call.data == 'type_dinein' else 'Parcel'
-        
-        # 1. Immediate Feedback (Fix Latency Perception)
-        try:
-            bot.edit_message_text(
-                f"⏳ **Generating Payment Link ({order_type})...**\nPlease wait.", 
-                call.message.chat.id, 
-                call.message.message_id,
-                parse_mode='Markdown'
-            )
-        except: pass
-        
-        # 2. Process Order
-        session = db_manager.get_session(student_phone)
-        if not session or not session.get('cart'):
-             bot.answer_callback_query(call.id, "Cart is empty!")
-             return
-
-        cart = session['cart']
-        if isinstance(cart, str): cart = json.loads(cart)
-        
-        total_price = sum(item['price'] * item['qty'] for item in cart)
-        
-        # Create DB Order
-        order_id = db_manager.create_order(student_phone, cart, total_price, "payment_pending")
-        if order_id:
-            # Generate Link with Order Type in Notes
-            payment_links = generate_razorpay_payment_link(total_price, order_id, student_phone, notes={'order_type': order_type})
-            
-            if payment_links:
-                # Save Razorpay ID
-                db_manager.update_order_razorpay_id(order_id, payment_links['id'])
-                
-                # Show Payment Button
-                markup = create_payment_keyboard(payment_links, order_id)
-                msg_text = (
-                    f"✅ **Order Confirmed!**\n"
-                    f"🆔 Order #{order_id}\n"
-                    f"🍱 Type: *{order_type}*\n"
-                    f"💰 Total: ₹{total_price}\n\n"
-                    f"👇 **Click below to Pay**"
-                )
-                bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-            else:
-                bot.send_message(call.message.chat.id, "❌ Error generating payment link. Try again.")
-        else:
-            bot.send_message(call.message.chat.id, "❌ Database Error. Clean cart and try again.")                    
+                        # 3. Generate Link and QR
+                        token_link = f"{request.host_url}token/{current_order_id}"
+                        
+                        try:
+                            # Generate QR for the Link
+                            qr = qrcode.QRCode(box_size=10, border=4)
+                            qr.add_data(token_link)
+                            qr.make(fit=True)
+                            qr_img = qr.make_image(fill_color="black", back_color="white")
+                            
+                            bio = io.BytesIO()
+                            qr_img.save(bio, 'PNG')
+                            bio.seek(0)
+                        
                             caption = (
                                 f"🎉 **Payment Successful!**\n\n"
                                 f"🔑 **Token #{token_num}**\n"

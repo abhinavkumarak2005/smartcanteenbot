@@ -813,7 +813,7 @@ def view_token(order_id):
 
 # --- PAYMENT HELPER FUNCTIONS ---
 
-def generate_razorpay_payment_link(order_id, amount, phone_number):
+def generate_razorpay_payment_link(order_id, amount, phone_number, notes=None):
     """Generates a Razorpay payment link."""
     try:
         if not RAZORPAY_KEY_ID: return None, None
@@ -838,7 +838,8 @@ def generate_razorpay_payment_link(order_id, amount, phone_number):
             },
             "notify": {"sms": False, "email": False},
             "callback_url": f"{BOT_PUBLIC_URL}/payment_success",
-            "callback_method": "get"
+            "callback_method": "get",
+            "notes": notes if notes else {}
         })
 
         payment_url = rzp_link['short_url']

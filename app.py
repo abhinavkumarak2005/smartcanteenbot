@@ -628,27 +628,34 @@ def handle_razorpay_webhook():
                             if user: student_name = user.get('name', 'Student')
                         except: pass
 
-                        # 3. Generate Token Image
+                        # 3. Generate Link and QR
+                        token_link = f"{request.host_url}token/{current_order_id}"
+                        
                         try:
-                            token_img = generate_token_image(token_num, current_order_id, items_data, total_amt, student_name)
+                            # Generate QR for the Link
+                            qr = qrcode.QRCode(box_size=10, border=4)
+                            qr.add_data(token_link)
+                            qr.make(fit=True)
+                            qr_img = qr.make_image(fill_color="black", back_color="white")
                             
+                            bio = io.BytesIO()
+                            qr_img.save(bio, 'PNG')
+                            bio.seek(0)
+                        
                             caption = (
-                                f"🎉 **Payment Successful!**\n"
-                                f"Use this Token #{token_num} to collect your order.\n"
+                                f"🎉 **Payment Successful!**\n\n"
+                                f"🔑 **Token #{token_num}**\n"
+                                f"Scan or Click below to view your Digital Token (Valid for today only):\n"
+                                f"{url_for('view_token', order_id=current_order_id, _external=True)}"
                             )
                             
-                            if token_img:
-                                bot.send_photo(student_chat_id, token_img, caption=caption, parse_mode='Markdown')
-                            else:
-                                bot.send_message(student_chat_id, caption, parse_mode='Markdown')
-                                
-                            send_admin_notification(order_details, f"Token #{token_num}")
+                            bot.send_photo(student_chat_id, bio, caption=caption, parse_mode='Markdown')
                             
-                        except Exception as inner_e:
-                            print(f"❌ Error sending token: {inner_e}")
-                            try:
-                                bot.send_message(student_chat_id, "✅ Paid! (Error generating token image, please show this msg).")
-                            except: pass
+                        except Exception as qr_err:
+                            print(f"Token Link QR Error: {qr_err}")
+                            bot.send_message(student_chat_id, f"🎉 Paid! Token #{token_num}. View here: {token_link}")
+                            
+                        send_admin_notification(order_details, f"Token #{token_num}")
 
                         print(f"✅ Order {current_order_id} processed.")
 
@@ -672,12 +679,9 @@ def handle_razorpay_success_redirect():
         
     return f"<h1>Payment Successful! 🎉</h1><p>You can close this window.</p><p>Please check Telegram for your Token receipt (Ref: {ref if ref else 'Processed'}).</p>"
 
-@app.route('/verify_token', methods=['GET'])
-def verify_token_page():
-    order_id = request.args.get('order_id')
-    if not order_id: return "Invalid Link", 400
-    
-    # Simple get_order might fail if date string issue, verify db_manager
+@app.route('/token/<order_id>', methods=['GET'])
+def view_token(order_id):
+    """View Digital Token (Self-Destructing)."""
     try:
         order = db_manager.get_order(order_id)
     except:
@@ -685,65 +689,129 @@ def verify_token_page():
         
     if not order: return "<h1>❌ Invalid Token</h1>", 404
     
-    # Format Token ID: JAN28-12
+    # Expiry Check (Valid only for Today)
     try:
         created_at = order.get('created_at')
         if isinstance(created_at, str): 
-            # Handle various string formats if needed, or assume ISO
              created_at = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-        date_str = created_at.strftime('%b%d').upper()
-    except:
-        date_str = datetime.now().strftime('%b%d').upper()
+        
+        # Allow viewing if it's the same day (naive check)
+        # Or if status is 'paid'. If 'picked_up', show used.
+        # User requested "Active for that day".
+        if created_at.date() != datetime.now().date():
+            return "<h1>⏳ Token Link Expired</h1><p>This link is only valid for the day of purchase.</p>", 410
+            
+    except: pass # Proceed if date parse fails (safety)
 
-    token_display = f"{date_str}-{order.get('daily_token')}"
+    # Format Data
+    date_str = created_at.strftime('%b %d')
+    token_display = f"{created_at.strftime('%b%d').upper()}-{order.get('daily_token')}"
     
     status_color = "#27ae60" if order['status'] == 'paid' else "#c0392b"
-    status_text = "✅ VALID TOKEN" if order['status'] == 'paid' else f"⚠️ {order['status'].upper()}"
-    if order['status'] == 'picked_up':
-        status_color = "#f39c12"
-        status_text = "🎫 USED / PICKED UP"
+    status_text = "VALID" if order['status'] == 'paid' else order['status'].upper()
     
-    # Parse items
+    # Items HTML
     try:
         items = json.loads(order['items']) if isinstance(order['items'], str) else order['items']
         items_html = "".join([f"<li><span>{i['name']}</span> <span>x{i['qty']}</span></li>" for i in items])
     except: items_html = "<li>Error parsing items</li>"
     
     html = f"""
+    <!DOCTYPE html>
     <html>
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Token Verification</title>
+        <title>Token #{token_display}</title>
         <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 20px; background: #f0f2f5; color: #333; }}
-            .ticket {{ background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 350px; margin: auto; border-top: 5px solid {status_color}; }}
-            .token {{ font-size: 2.5em; font-weight: 800; color: #333; margin: 15px 0; letter-spacing: 1px; }}
-            .status {{ font-size: 1.2em; font-weight: bold; color: {status_color}; background: {status_color}20; padding: 10px; border-radius: 8px; display: inline-block; margin-bottom: 20px; }}
-            ul {{ list-style: none; padding: 0; text-align: left; margin: 20px 0; }}
-            li {{ padding: 10px 0; border-bottom: 1px dashed #ddd; display: flex; justify-content: space-between; }}
-            li:last-child {{ border-bottom: none; }}
-            .meta {{ color: #777; font-size: 0.9em; margin-top: 20px; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; padding: 20px; text-align: center; }}
+            .card {{ background: white; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); max-width: 400px; margin: auto; overflow: hidden; }}
+            .header {{ background: #4a235a; color: white; padding: 20px; }}
+            .header h1 {{ margin: 0; font-size: 2em; letter-spacing: 2px; }}
+            .header .id {{ font-size: 0.9em; opacity: 0.8; margin-top: 5px; }}
+            .content {{ padding: 20px; text-align: left; }}
+            .status-badge {{ background: {status_color}20; color: {status_color}; padding: 5px 15px; border-radius: 15px; font-weight: bold; display: inline-block; margin-bottom: 20px; }}
+            ul {{ list-style: none; padding: 0; margin: 0; }}
+            li {{ display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed #eee; }}
+            .total {{ display: flex; justify-content: space-between; font-weight: bold; font-size: 1.2em; margin-top: 15px; border-top: 2px solid #eee; padding-top: 15px; }}
+            .footer {{ padding: 20px; background: #fafafa; }}
+            .btn {{ display: block; width: 100%; padding: 15px; background: #4a235a; color: white; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 10px; }}
+            .btn.secondary {{ background: white; color: #4a235a; border: 2px solid #4a235a; }}
         </style>
     </head>
     <body>
-        <div class="ticket">
-            <h2>🎟 Canteen Token</h2>
-            <div class="status">{status_text}</div>
-            <div class="token">{token_display}</div>
-            
-            <div style="text-align: left; margin-bottom: 5px; font-weight: bold; color: #555;">Order Details</div>
-            <ul>{items_html}</ul>
-            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; margin-top: 10px; border-top: 2px solid #eee; padding-top: 10px;">
-                <span>Total</span>
-                <span>₹{order['total_amount']}</span>
+        <div class="card">
+            <div class="header">
+                <div class="id">TOKEN</div>
+                <h1>{token_display}</h1>
             </div>
-            
-            <div class="meta">Order #{order['id']} • {date_str}</div>
+            <div class="content">
+                <div style="text-align: center;"><span class="status-badge">{status_text}</span></div>
+                <p><strong>Order ID:</strong> {order_id}</p>
+                <p><strong>Date:</strong> {date_str}</p>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                <ul>{items_html}</ul>
+                <div class="total">
+                    <span>Total</span>
+                    <span>₹{order['total_amount']}</span>
+                </div>
+            </div>
+            <div class="footer">
+                <a href="/token/{order_id}/download" class="btn">📥 Download Image</a>
+                <div style="font-size: 0.8em; color: #777; margin-top: 10px;">Link expires at midnight</div>
+            </div>
         </div>
     </body>
     </html>
     """
     return html
+
+@app.route('/token/<order_id>/download')
+def download_token(order_id):
+    """Generate and Download Token Image."""
+    try:
+        # Fetch Order
+        try: order = db_manager.get_order(order_id)
+        except: order = db_manager.get_order_details(order_id)
+        
+        if not order: return "Not Found", 404
+        
+        # Check Expiry
+        created_at = order.get('created_at')
+        if isinstance(created_at, str): 
+             created_at = datetime.strptime(created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
+        if created_at.date() != datetime.now().date():
+            return "Expired", 410
+
+        # Parse Data
+        items = json.loads(order['items']) if isinstance(order['items'], str) else order['items']
+        student_id = order.get('user_id') or order.get('student_phone')
+        student_name = "Student"
+        try:
+             u = db_manager.get_user(student_id)
+             if u: student_name = u.get('name', 'Student')
+        except: pass
+        
+        # Generate
+        img_buffer = generate_token_image(
+            order.get('daily_token'),
+            order_id,
+            items,
+            order['total_amount'],
+            student_name
+        )
+        
+        if img_buffer:
+            return send_file(
+                img_buffer,
+                mimetype='image/png',
+                as_attachment=True,
+                download_name=f"Canteen_Token_{order['daily_token']}.png"
+            )
+        else:
+            return "Generation Error", 500
+            
+    except Exception as e:
+        return f"Error: {e}", 500
 
 
 # --- PAYMENT HELPER FUNCTIONS ---

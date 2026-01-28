@@ -237,15 +237,20 @@ def handle_registration_flow(message, telegram_id, text, conn):
     # Simplified: Use session state
     state = db_manager.get_session_state(telegram_id, conn=conn)
     
+    if text == '/start':
+        # Reset registration if user sends /start
+        db_manager.set_session_state(telegram_id, 'initial', conn=conn)
+        state = 'initial'
+
     if state == 'initial':
         # Prompt Name
-        bot.send_message(telegram_id, "👋 Welcome! It seems you are new here.\nPlease enter your **Full Name** to register:")
+        bot.send_message(telegram_id, "👋 Welcome! It seems you are new here.\nPlease enter your **Full Name** to register:", parse_mode='Markdown')
         db_manager.set_session_state(telegram_id, 'reg_name', conn=conn)
         
     elif state == 'reg_name':
         # Save Name, Prompt Phone
         db_manager.set_session_data(telegram_id, 'registration_data', {'name': text}, conn=conn)
-        bot.send_message(telegram_id, f"Nice to meet you, {text}! 🤝\nNow, please share your **Mobile Number** (or type it):")
+        bot.send_message(telegram_id, f"Nice to meet you, {text}! 🤝\nNow, please share your **Mobile Number** (or type it):", parse_mode='Markdown')
         db_manager.set_session_state(telegram_id, 'reg_phone', conn=conn)
         
     elif state == 'reg_phone':
@@ -262,6 +267,13 @@ def handle_registration_flow(message, telegram_id, text, conn):
         else:
             bot.send_message(telegram_id, "❌ Error saving profile. Please try again.")
             db_manager.set_session_state(telegram_id, 'initial', conn=conn)
+    
+    else:
+        # Fallback for undefined states (Limbo Fix)
+        print(f"⚠️ User {telegram_id} in unknown state '{state}'. Resetting.")
+        db_manager.set_session_state(telegram_id, 'initial', conn=conn)
+        bot.send_message(telegram_id, "👋 Welcome! Let's get you registered.\nPlease enter your **Full Name**:", parse_mode='Markdown')
+        db_manager.set_session_state(telegram_id, 'reg_name', conn=conn)
 
 def handle_student_flow(msg, telegram_id, chat_id, user, conn=None):
     """Handle registered student messages."""

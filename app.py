@@ -129,7 +129,8 @@ def handle_incoming_message(message, conn=None):
         open_time = db_manager.get_setting('open_time', '00:00', conn=conn)
         close_time = db_manager.get_setting('close_time', '23:59', conn=conn)
         
-        now = datetime.now()
+        # Convert UTC to IST (UTC + 5:30)
+        now = datetime.now() + timedelta(hours=5, minutes=30)
         current_time = now.strftime('%H:%M')
         
         # Simple string comparison works for HH:MM 24h format

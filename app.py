@@ -191,7 +191,7 @@ def handle_callback_query(call, conn=None):
                 kb = types.InlineKeyboardMarkup()
                 for i in items:
                     kb.add(types.InlineKeyboardButton(f"❌ Delete {i['name']}", callback_data=f"del_{i['id']}"))
-                kb.add(types.InlineKeyboardButton("➕ Add New Item (Type 'add Name Price')", callback_data="admin_add_help"))
+                kb.add(types.InlineKeyboardButton("➕ Add New Item (Type 'add Name Price [Cat]')", callback_data="admin_add_help"))
                 kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="admin_home"))
                 bot.send_message(chat_id, "🍔 **Menu Management**\nTap to delete:", reply_markup=kb, parse_mode='Markdown')
                 return
@@ -221,7 +221,7 @@ def handle_callback_query(call, conn=None):
 
             elif data == 'admin_add_help':
                 bot.answer_callback_query(call.id, "Cheatsheet")
-                bot.send_message(chat_id, "💡 **To add an item:**\nType the command:\n`add Name Price`\nExample: `add Burger 50`", parse_mode='Markdown')
+                bot.send_message(chat_id, "💡 **To add an item:**\nType: `add Name Price [Category]`\n\n**Categories:**\n- Breakfast\n- Lunch\n- Snacks (Default)\n\n**Examples:**\n`add Idli 20 Breakfast`\n`add Meals 50 Lunch`\n`add Tea 10`", parse_mode='Markdown')
                 return
             
             elif data.startswith('mark_delivered_'):

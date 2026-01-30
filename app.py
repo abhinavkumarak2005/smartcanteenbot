@@ -1204,7 +1204,9 @@ def handle_admin_commands(msg, chat_id, conn=None):
             # Allowed: Breakfast, Lunch, Snacks
             valid_cats = ['Breakfast', 'Lunch', 'Snacks']
             
+            # Normalize Input: Capitalize first letter, lower others (e.g. BREAKFAST -> Breakfast)
             potential_cat = parts[-1].capitalize()
+            
             if potential_cat in valid_cats:
                 category = potential_cat
                 price_str = parts[-2]

@@ -108,6 +108,11 @@ def create_tables():
                 # Actually, `ADD COLUMN IF NOT EXISTS` is supported in Postgres 9.6+. Supabase is 15+.
                 pass
 
+            # Update Menu Table
+            try:
+                cursor.execute("ALTER TABLE menu ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Snacks';")
+            except Exception as ex: pass
+
             # 4. User Sessions Table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_sessions (
@@ -159,11 +164,13 @@ def add_default_menu_items():
 
             if count == 0:
                 default_items = [
-                    ('Samosa', 15.0),
-                    ('Tea', 10.0),
-                    ('Coffee', 15.0),
+                    ('Samosa', 15.0, 'Snacks'),
+                    ('Tea', 10.0, 'Snacks'),
+                    ('Coffee', 15.0, 'Snacks'),
+                    ('Idli', 20.0, 'Breakfast'),
+                    ('Meals', 50.0, 'Lunch')
                 ]
-                cursor.executemany('INSERT INTO menu (name, price) VALUES (%s, %s)', default_items)
+                cursor.executemany('INSERT INTO menu (name, price, category) VALUES (%s, %s, %s)', default_items)
                 conn.commit()
                 print("✅ Default menu items added successfully!")
 
@@ -216,17 +223,17 @@ def get_menu_item(item_id, conn=None):
     finally:
         if should_close and conn: conn.close()
 
-def add_menu_item(name, price):
+def add_menu_item(name, price, category='Snacks'):
     """Add new menu item."""
     try:
         conn = create_connection()
         if not conn: return "❌ Database connection error"
 
         with conn.cursor() as cursor:
-            cursor.execute('INSERT INTO menu (name, price) VALUES (%s, %s) RETURNING id', (name, price))
+            cursor.execute('INSERT INTO menu (name, price, category) VALUES (%s, %s, %s) RETURNING id', (name, price, category))
             item_id = cursor.fetchone()[0]
             conn.commit()
-        return f"✅ Added '{name}' for ₹{price:.2f} (ID: {item_id})"
+        return f"✅ Added '{name}' ({category}) for ₹{price:.2f} (ID: {item_id})"
 
     except Exception as e:
         print(f"❌ Error adding menu item: {e}")

@@ -383,9 +383,32 @@ def show_menu(chat_id, conn, message_to_edit=None):
         txt = "📋 *Today's Menu*\nSelect an item to order:\n_(Type 'cancel' to restart)_"
         keyboard = types.InlineKeyboardMarkup(row_width=1)
         
+        # Group by Category (Ordered)
+        categories = {'Breakfast': [], 'Lunch': [], 'Snacks': [], 'Other': []}
+        
         for item in items:
-            btn_text = f"{item['name']}  -  ₹{item['price']}"
-            keyboard.add(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
+            cat = item.get('category', 'Snacks')
+            if cat not in categories: cat = 'Other'
+            categories[cat].append(item)
+            
+        # Add buttons with headers (Hack: Buttons can't be headers, so we just list them)
+        # Better: Send text per category? No, single message is cleaner for cart.
+        # We will use Unicode chars to distinguish.
+        
+        for cat, cat_items in categories.items():
+            if not cat_items: continue
+            
+            # Category Header (Disabled Button or just Visual separation in text?)
+            # InlineKeyboard doesn't support headers well. 
+            # Solution: Add a dummy button for header or just list items.
+            # Let's add a dummy disabled button as header looks good.
+            # Or just rely on list order.
+            
+            keyboard.add(types.InlineKeyboardButton(f"--- {cat} ---", callback_data="noop"))
+            
+            for item in cat_items:
+                btn_text = f"{item['name']}  -  ₹{item['price']}"
+                keyboard.add(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
         
         keyboard.add(types.InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"))
         
@@ -1170,16 +1193,36 @@ def handle_admin_commands(msg, chat_id, conn=None):
 
     # 2. Text Commands
     if msg.lower().startswith("add "):
-        # add Name Price
+        # add Name Price Category
         parts = msg.split(' ')
         if len(parts) >= 3:
-            price = parts[-1]
-            name = " ".join(parts[1:-1])
+            # Check if last part is a number (Price) -> Old format
+            # New format: Name Price Category
+            # e.g. "add Idli 20 Breakfast"
+            
+            # Strategy: Try to parse last part as category.
+            # Allowed: Breakfast, Lunch, Snacks
+            valid_cats = ['Breakfast', 'Lunch', 'Snacks']
+            
+            potential_cat = parts[-1].capitalize()
+            if potential_cat in valid_cats:
+                category = potential_cat
+                price_str = parts[-2]
+                name = " ".join(parts[1:-2])
+            else:
+                # Fallback to old format (Default Snacks) or assume last is price
+                category = 'Snacks'
+                price_str = parts[-1]
+                name = " ".join(parts[1:-1])
+                
             try:
-                res = db_manager.add_menu_item(name, float(price))
+                price = float(price_str)
+                res = db_manager.add_menu_item(name, price, category)
                 bot.send_message(chat_id, res)
-            except:
-                bot.send_message(chat_id, "❌ Error. Use: `add Name Price`")
+            except ValueError:
+                 bot.send_message(chat_id, "❌ Invalid Price. Use: `add Name Price [Category]`")
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ Error: {e}")
         return
         
     elif msg.lower().startswith("delete "):

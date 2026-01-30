@@ -237,7 +237,7 @@ def add_menu_item(name, price, category='Snacks'):
 
     except Exception as e:
         print(f"❌ Error adding menu item: {e}")
-        return "❌ Error adding menu item"
+        return f"❌ Error adding menu item: {e}"
     finally:
         if conn: conn.close()
 

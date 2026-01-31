@@ -395,7 +395,9 @@ def show_menu(chat_id, conn, message_to_edit=None):
             if not cat_items: continue
             
             # Header (Full Width - utilizing dummy button)
-            keyboard.add(types.InlineKeyboardButton(f"--- {cat} ---", callback_data="noop"))
+            # Using Unicode Bold for visual distinction if standard bold not supported in buttons
+            # Actually, standard bold is not supported. We use Caps.
+            keyboard.add(types.InlineKeyboardButton(f"--- {cat.upper()} ---", callback_data="noop"))
             
             # Smart Grid Logic
             # - Short names: 2 per row

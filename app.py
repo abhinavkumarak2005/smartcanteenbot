@@ -404,11 +404,22 @@ def show_menu(chat_id, conn, message_to_edit=None):
             # Let's add a dummy disabled button as header looks good.
             # Or just rely on list order.
             
+            # Header (Full Width)
             keyboard.add(types.InlineKeyboardButton(f"--- {cat} ---", callback_data="noop"))
             
+            # Grid View (2 items per row)
+            grid_row = []
             for item in cat_items:
-                btn_text = f"{item['name']}  -  ₹{item['price']}"
-                keyboard.add(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
+                btn_text = f"{item['name']} - ₹{int(item['price'])}"
+                grid_row.append(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
+                
+                if len(grid_row) == 2:
+                    keyboard.add(*grid_row)
+                    grid_row = []
+            
+            # Add remaining item if any
+            if grid_row:
+                keyboard.add(*grid_row)
         
         keyboard.add(types.InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"))
         

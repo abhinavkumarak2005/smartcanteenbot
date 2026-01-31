@@ -99,7 +99,9 @@ def create_tables():
             # Apply Schema Updates for existing tables (safe migration)
             try:
                 cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_token INTEGER;")
+                cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daily_token INTEGER;")
                 cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id BIGINT;")
+                cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'Dine-in';")
             except Exception as ex:
                 print(f"⚠️ Schema update notice: {ex}")
                 conn.rollback() # Rollback the failed alter, but continue (if it failed it likely exists or syntax error)
@@ -284,8 +286,8 @@ def delete_menu_item(item_id):
 
 # ========== ORDER OPERATIONS ==========
 
-def create_order(student_phone, order_details, total_amount, status='pending', conn=None, user_id=None):
-    """Create a new order with daily token."""
+def create_order(student_phone, order_details, total_amount, status='pending', conn=None, user_id=None, order_type='Dine-in'):
+    """Create a new order with daily token and order type."""
     should_close = False
     if not conn:
         conn = create_connection()
@@ -305,9 +307,9 @@ def create_order(student_phone, order_details, total_amount, status='pending', c
             daily_token = count + 1
 
             cursor.execute('''
-                INSERT INTO orders (student_phone, user_id, items, total_amount, status, daily_token)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
-            ''', (student_phone, user_id, items_json, total_amount, status, daily_token))
+                INSERT INTO orders (student_phone, user_id, items, total_amount, status, daily_token, order_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ''', (student_phone, user_id, items_json, total_amount, status, daily_token, order_type))
             
             order_id = cursor.fetchone()[0]
             conn.commit()

@@ -381,7 +381,7 @@ def show_menu(chat_id, conn, message_to_edit=None):
             return
 
         txt = "📋 *Today's Menu*\nSelect an item to order:\n_(Type 'cancel' to restart)_"
-        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard = types.InlineKeyboardMarkup(row_width=2) # Fix: Allow 2 columns
         
         # Group by Category (Ordered)
         categories = {'Breakfast': [], 'Lunch': [], 'Snacks': [], 'Other': []}
@@ -391,35 +391,40 @@ def show_menu(chat_id, conn, message_to_edit=None):
             if cat not in categories: cat = 'Other'
             categories[cat].append(item)
             
-        # Add buttons with headers (Hack: Buttons can't be headers, so we just list them)
-        # Better: Send text per category? No, single message is cleaner for cart.
-        # We will use Unicode chars to distinguish.
-        
         for cat, cat_items in categories.items():
             if not cat_items: continue
             
-            # Category Header (Disabled Button or just Visual separation in text?)
-            # InlineKeyboard doesn't support headers well. 
-            # Solution: Add a dummy button for header or just list items.
-            # Let's add a dummy disabled button as header looks good.
-            # Or just rely on list order.
-            
-            # Header (Full Width)
+            # Header (Full Width - utilizing dummy button)
             keyboard.add(types.InlineKeyboardButton(f"--- {cat} ---", callback_data="noop"))
             
-            # Grid View (2 items per row)
-            grid_row = []
-            for item in cat_items:
-                btn_text = f"{item['name']} - ₹{int(item['price'])}"
-                grid_row.append(types.InlineKeyboardButton(btn_text, callback_data=f"add_{item['id']}"))
-                
-                if len(grid_row) == 2:
-                    keyboard.add(*grid_row)
-                    grid_row = []
+            # Smart Grid Logic
+            # - Short names: 2 per row
+            # - Long names: 1 per row
             
-            # Add remaining item if any
-            if grid_row:
-                keyboard.add(*grid_row)
+            current_row = []
+            for item in cat_items:
+                name_price = f"{item['name']} - ₹{int(item['price'])}"
+                
+                # Check length (approx > 15-20 chars is long for half screen)
+                is_long = len(name_price) > 20
+                
+                if is_long:
+                    # If we have a pending short item, add it first
+                    if current_row:
+                        keyboard.add(*current_row)
+                        current_row = []
+                    # Add long item in its own row
+                    keyboard.add(types.InlineKeyboardButton(name_price, callback_data=f"add_{item['id']}"))
+                else:
+                    # Short item, queue it
+                    current_row.append(types.InlineKeyboardButton(name_price, callback_data=f"add_{item['id']}"))
+                    if len(current_row) == 2:
+                        keyboard.add(*current_row)
+                        current_row = []
+            
+            # Add leftovers
+            if current_row:
+                keyboard.add(*current_row)
         
         keyboard.add(types.InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"))
         
@@ -536,7 +541,7 @@ def handle_checkout(chat_id, conn, order_type='Dine-in'):
     user = db_manager.get_user(chat_id, conn=conn)
     
     # Create Order
-    order_id = db_manager.create_order(user['phone_number'], cart, total, user_id=chat_id, conn=conn)
+    order_id = db_manager.create_order(user['phone_number'], cart, total, user_id=chat_id, conn=conn, order_type=order_type)
     
     if order_id:
         # Pass notes to Razorpay (requires updating generate func if not kwargs ready)
@@ -1364,10 +1369,17 @@ def send_admin_notification(order_details, verification_code):
              token_num = f"{datetime.now().strftime('%b%d').upper()}-{order_details.get('daily_token', '?')}"
         except: token_num = verification_code
 
+        start_msg = "🚨 *NEW ORDER PAID!*"
+        
+        # Check if order_type exists, else default (support old records)
+        otype = order_details.get('order_type', 'Dine-in')
+        type_icon = "🍽" if otype == 'Dine-in' else "📦"
+
         msg = (
-            f"🚨 *NEW ORDER PAID!* ({token_num})\n"
+            f"{start_msg} ({token_num})\n"
             f"Amt: ₹{order_details['total_amount']}\n"
-            f"User: {order_details.get('student_phone')}\n\n"
+            f"User: {order_details.get('student_phone')}\n"
+            f"Type: {type_icon} *{otype}*\n\n"
             f"{food_summary}"
         )
         

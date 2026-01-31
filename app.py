@@ -1280,8 +1280,8 @@ def get_daily_report_data(date_str, conn):
                 SELECT o.*, u.name as user_name
                 FROM orders o
                 LEFT JOIN users u ON o.user_id = u.telegram_id
-                WHERE o.status = 'paid' 
-                AND o.created_at::date = %s
+                WHERE o.status IN ('paid', 'delivered') 
+                AND (o.created_at + interval '5 hours 30 minutes')::date = %s
                 ORDER BY o.created_at ASC
             ''', (date_str,))
             orders = [dict(row) for row in cursor.fetchall()]
